@@ -1,0 +1,10 @@
+{
+  "name": "coin-radar-scan",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Coin Radar otomatik tarama scripti (GitHub Actions ile calisir)",
+  "main": "scan.js",
+  "dependencies": {
+    "firebase-admin": "^12.6.0"
+  }
+}
