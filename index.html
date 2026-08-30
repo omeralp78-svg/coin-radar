@@ -1,0 +1,1033 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Coin Radar — Tekrar Patlama Takibi</title>
+<style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+    :root {
+        --bg: #0b0d14;
+        --bg-elev: #12151f;
+        --card: #161a26;
+        --border: #262b3b;
+        --border-soft: #1e2230;
+        --text: #eef0f6;
+        --muted: #7d859e;
+        --muted-dim: #565d75;
+        --amber: #f5a623;
+        --amber-dim: rgba(245,166,35,0.14);
+        --teal: #2dd4bf;
+        --teal-dim: rgba(45,212,191,0.14);
+        --coral: #ff6363;
+        --coral-dim: rgba(255,99,99,0.14);
+        --violet: #8b7cf6;
+    }
+    * { box-sizing: border-box; }
+    body {
+        margin: 0; font-family: 'Inter', -apple-system, sans-serif;
+        background:
+            radial-gradient(ellipse 900px 500px at 15% -10%, rgba(139,124,246,0.08), transparent),
+            radial-gradient(ellipse 700px 500px at 100% 0%, rgba(245,166,35,0.06), transparent),
+            var(--bg);
+        color: var(--text); padding: 0 0 60px 0;
+        font-size: 15px;
+    }
+    .mono { font-family: 'IBM Plex Mono', monospace; }
+    .wrap { max-width: 1080px; margin: 0 auto; padding: 0 20px; }
+
+    /* ---------- Header ---------- */
+    header {
+        border-bottom: 1px solid var(--border-soft);
+        padding: 22px 0 20px 0; margin-bottom: 22px;
+    }
+    .header-row {
+        display: flex; align-items: center; justify-content: space-between;
+        gap: 16px; flex-wrap: wrap;
+    }
+    .brand { display: flex; align-items: center; gap: 12px; }
+    .brand-dot {
+        width: 11px; height: 11px; border-radius: 50%; background: var(--amber);
+        box-shadow: 0 0 0 0 rgba(245,166,35,0.6);
+        animation: pulse-dot 2.2s infinite;
+        flex-shrink: 0;
+    }
+    @keyframes pulse-dot {
+        0% { box-shadow: 0 0 0 0 rgba(245,166,35,0.55); }
+        70% { box-shadow: 0 0 0 9px rgba(245,166,35,0); }
+        100% { box-shadow: 0 0 0 0 rgba(245,166,35,0); }
+    }
+    .brand-text h1 { font-size: 19px; font-weight: 800; margin: 0; letter-spacing: -0.01em; }
+    .brand-text .tag { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+
+    #scan-btn {
+        background: var(--amber); color: #1a1206; border: none;
+        padding: 11px 20px; border-radius: 10px; font-size: 14px; font-weight: 700;
+        cursor: pointer; display: flex; align-items: center; gap: 8px;
+        transition: transform 0.12s ease, box-shadow 0.12s ease;
+    }
+    #scan-btn:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 6px 18px rgba(245,166,35,0.25); }
+    #scan-btn:disabled { opacity: 0.55; cursor: default; }
+    .icon-actions { display: flex; gap: 8px; align-items: center; }
+    .icon-btn {
+        background: var(--bg-elev); border: 1px solid var(--border); color: var(--muted);
+        padding: 10px 14px; border-radius: 10px; font-size: 13px; cursor: pointer;
+        transition: border-color 0.12s ease, color 0.12s ease;
+    }
+    .icon-btn:hover { border-color: var(--muted-dim); color: var(--text); }
+
+    #status-msg {
+        display: block; margin-top: 12px; font-size: 13px; color: var(--muted);
+        min-height: 18px;
+    }
+    #status-msg.error { color: var(--coral); }
+    #status-msg.ok { color: var(--teal); }
+
+    /* ---------- Section headers ---------- */
+    .section { margin-bottom: 26px; }
+    .section-head {
+        display: flex; align-items: baseline; justify-content: space-between;
+        gap: 12px; margin-bottom: 4px; flex-wrap: wrap;
+    }
+    .section-head h2 {
+        font-size: 15.5px; font-weight: 700; margin: 0;
+        display: flex; align-items: center; gap: 8px;
+    }
+    .section-head .count-chip {
+        font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: var(--muted);
+        background: var(--bg-elev); border: 1px solid var(--border-soft);
+        padding: 2px 8px; border-radius: 999px;
+    }
+    .section-desc { color: var(--muted); font-size: 13px; margin: 6px 0 14px 0; line-height: 1.55; max-width: 720px; }
+
+    /* ---------- Card / Table ---------- */
+    .card {
+        background: var(--card); border: 1px solid var(--border-soft); border-radius: 14px;
+        overflow: hidden;
+    }
+    table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+    thead th {
+        text-align: left; color: var(--muted); font-weight: 600; font-size: 11.5px;
+        text-transform: uppercase; letter-spacing: 0.04em;
+        padding: 12px 14px; border-bottom: 1px solid var(--border-soft);
+        white-space: nowrap; background: var(--bg-elev);
+    }
+    tbody td {
+        padding: 13px 14px; border-bottom: 1px solid var(--border-soft); white-space: nowrap;
+    }
+    tbody tr:last-child td { border-bottom: none; }
+    tbody tr { cursor: pointer; transition: background 0.1s ease; }
+    tbody tr:hover td { background: #1c2133; }
+
+    .sym { font-weight: 700; font-family: 'IBM Plex Mono', monospace; font-size: 13px; }
+    .sub-cell { color: var(--muted-dim); font-size: 11.5px; margin-top: 2px; }
+    .pos { color: var(--teal); font-weight: 600; font-family: 'IBM Plex Mono', monospace; }
+    .neg { color: var(--coral); font-weight: 600; font-family: 'IBM Plex Mono', monospace; }
+    .num { font-family: 'IBM Plex Mono', monospace; }
+
+    .status-chip {
+        display: inline-flex; align-items: center; gap: 6px;
+        padding: 5px 11px; border-radius: 999px; font-size: 11.5px; font-weight: 700;
+        white-space: nowrap;
+    }
+    .status-chip .dot { width: 6px; height: 6px; border-radius: 50%; }
+    .chip-hot { background: var(--coral-dim); color: #ff8a8a; }
+    .chip-hot .dot { background: var(--coral); animation: pulse-dot 1.6s infinite; }
+    .chip-warm { background: var(--amber-dim); color: var(--amber); }
+    .chip-warm .dot { background: var(--amber); }
+    .chip-mild { background: rgba(139,124,246,0.14); color: var(--violet); }
+    .chip-mild .dot { background: var(--violet); }
+    .chip-confirmed { background: var(--teal-dim); color: var(--teal); }
+    .chip-confirmed .dot { background: var(--teal); }
+
+    .empty-state {
+        text-align: center; padding: 46px 20px; color: var(--muted);
+        font-size: 13.5px; line-height: 1.6;
+    }
+    .empty-state .big-emoji { font-size: 30px; display: block; margin-bottom: 10px; opacity: 0.7; }
+
+    details.advanced { margin-top: 20px; }
+    details.advanced summary {
+        cursor: pointer; color: var(--muted); font-size: 12.5px; padding: 8px 0;
+        list-style: none;
+    }
+    details.advanced summary::-webkit-details-marker { display: none; }
+    .settings-grid {
+        display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+        gap: 12px; margin-top: 10px; background: var(--card); border: 1px solid var(--border-soft);
+        border-radius: 12px; padding: 16px;
+    }
+    .settings-grid label { display: flex; flex-direction: column; gap: 6px; font-size: 11.5px; color: var(--muted); }
+    .settings-grid input {
+        background: var(--bg-elev); border: 1px solid var(--border); color: var(--text);
+        padding: 8px 10px; border-radius: 8px; font-family: 'IBM Plex Mono', monospace; font-size: 13px;
+    }
+
+    footer.disclaimer {
+        font-size: 12px; color: var(--muted-dim); text-align: center;
+        line-height: 1.7; margin-top: 30px; padding: 18px 10px 0 10px;
+        border-top: 1px solid var(--border-soft);
+    }
+
+    /* ---------- Modal ---------- */
+    .modal-overlay {
+        display: none; position: fixed; inset: 0; background: rgba(6,7,11,0.75);
+        backdrop-filter: blur(2px);
+        z-index: 1000; align-items: flex-start; justify-content: center;
+        overflow-y: auto; padding: 40px 16px;
+    }
+    .modal-overlay.open { display: flex; }
+    .modal-box {
+        background: var(--card); border: 1px solid var(--border); border-radius: 16px;
+        max-width: 640px; width: 100%; padding: 26px; position: relative;
+        box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+    }
+    .modal-close {
+        position: absolute; top: 16px; right: 16px; background: var(--bg-elev); border: 1px solid var(--border);
+        color: var(--muted); font-size: 18px; cursor: pointer; line-height: 1;
+        width: 30px; height: 30px; border-radius: 8px; display: flex; align-items: center; justify-content: center;
+    }
+    .modal-close:hover { color: var(--text); border-color: var(--muted-dim); }
+    .modal-title { font-size: 21px; font-weight: 800; margin-bottom: 4px; font-family: 'IBM Plex Mono', monospace; }
+    .modal-subtitle { color: var(--muted); font-size: 13px; margin-bottom: 18px; }
+    .modal-loading { text-align: center; padding: 50px 10px; color: var(--muted); font-size: 13.5px; }
+
+    .verdict-box { border-radius: 12px; padding: 16px; margin-bottom: 20px; font-size: 13.5px; line-height: 1.6; }
+    .verdict-bullish { background: var(--teal-dim); border: 1px solid rgba(45,212,191,0.35); }
+    .verdict-bearish { background: var(--coral-dim); border: 1px solid rgba(255,99,99,0.35); }
+    .verdict-neutral { background: var(--amber-dim); border: 1px solid rgba(245,166,35,0.35); }
+    .verdict-title { font-weight: 700; font-size: 14.5px; margin-bottom: 6px; }
+
+    .metric-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 18px; }
+    .metric-box { background: var(--bg-elev); border: 1px solid var(--border-soft); border-radius: 10px; padding: 12px; }
+    .metric-label { font-size: 11.5px; color: var(--muted); margin-bottom: 4px; }
+    .metric-value { font-size: 17px; font-weight: 700; font-family: 'IBM Plex Mono', monospace; }
+    .metric-note { font-size: 11.5px; color: var(--muted); margin-top: 4px; line-height: 1.4; }
+
+    .modal-section-title { font-size: 13px; font-weight: 700; margin: 18px 0 8px 0; color: var(--text); }
+    .modal-disclaimer {
+        font-size: 11px; color: var(--muted-dim); margin-top: 16px; padding-top: 12px;
+        border-top: 1px solid var(--border-soft); line-height: 1.5;
+    }
+
+    @media (max-width: 640px) {
+        body { font-size: 14px; }
+        .wrap { padding: 0 12px; }
+        header { padding: 16px 0 14px 0; }
+        .header-row { flex-direction: column; align-items: stretch; }
+        .brand { justify-content: flex-start; }
+        .brand-text h1 { font-size: 17px; }
+        .brand-text .tag { font-size: 11.5px; }
+        .icon-actions { width: 100%; flex-wrap: wrap; }
+        .icon-actions .icon-btn { flex: 1 1 auto; }
+        #scan-btn { flex: 1 1 100%; order: -1; justify-content: center; padding: 13px 14px; }
+        .icon-btn { padding: 12px 12px; font-size: 12.5px; }
+        .section-head h2 { font-size: 14px; }
+        .section-desc { font-size: 12px; }
+
+        /* Tablolari mobilde kart gorunumune cevir */
+        .card table, .card thead, .card tbody, .card tr, .card th, .card td {
+            display: block;
+        }
+        .card thead { display: none; }
+        .card tbody tr {
+            padding: 12px 14px; border-bottom: 1px solid var(--border-soft);
+        }
+        .card tbody tr:last-child { border-bottom: none; }
+        .card tbody td {
+            border: none; padding: 5px 0; white-space: normal;
+            display: flex; align-items: center; justify-content: space-between; gap: 10px;
+        }
+        .card tbody td::before {
+            content: attr(data-label); color: var(--muted); font-size: 11px;
+            text-transform: uppercase; letter-spacing: 0.03em; flex-shrink: 0;
+        }
+        .card tbody td:empty, .card tbody td[data-label=""] { display: none; }
+        .card tbody td:has(.empty-state) { display: block; }
+        .card tbody td .sub-cell { margin-top: 0; text-align: right; }
+        .empty-state::before { content: none; }
+        .empty-state { display: block; padding: 34px 16px; }
+
+        .metric-grid { grid-template-columns: 1fr; }
+        .modal-box { padding: 18px; border-radius: 14px; }
+        .modal-overlay { padding: 0; align-items: stretch; }
+        .modal-box { max-width: 100%; width: 100%; min-height: 100%; border-radius: 0; margin: 0; }
+        .modal-title { font-size: 19px; }
+        .settings-grid { grid-template-columns: repeat(2, 1fr); }
+    }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+    <header>
+        <div class="header-row">
+            <div class="brand">
+                <span class="brand-dot"></span>
+                <div class="brand-text">
+                    <h1>Coin Radar</h1>
+                    <div class="tag">Geçmişte patlayıp düşen, yeniden patlama ihtimali taşıyan coinleri izler</div>
+                </div>
+            </div>
+            <div class="icon-actions">
+                <button class="icon-btn" onclick="recalcSignals()">↻ Yeniden hesapla</button>
+                <button class="icon-btn" onclick="clearAll()">⌫ Sıfırla</button>
+                <button id="scan-btn" onclick="runScan()">▶ Bugünü Tara</button>
+            </div>
+        </div>
+        <span id="status-msg">Hazır — taramayı başlatmak için yukarıdaki butona bas.</span>
+    </header>
+
+    <div class="section">
+        <div class="section-head">
+            <h2>🎯 Yakında Patlayabilecek Coinler</h2>
+            <span class="count-chip" id="watching-count">0 aday</span>
+        </div>
+        <div class="section-desc">
+            Geçmişte sert yükselip düşmüş, düşüşü hâlâ taze olan, bugün henüz tekrar patlamamış coinler.
+            En üstteki en "sıcak" adaydır. <strong>"Sıkışma"</strong> sütunu, her aday için klasik short-squeeze
+            koşulunu (günlük Bollinger bandı daralması + son 48 saatte OI artışı ile birlikte yatay fiyat + negatif
+            funding) otomatik kontrol eder — üçü birden sağlanınca 🎯 işareti çıkar. Hiçbiri 🎯 göstermeyebilir,
+            bu tamamen normaldir; sıkı bir kural setidir. Satıra tıklayınca detaylı canlı analiz açılır.
+        </div>
+        <div class="card">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Coin</th><th>Patlama</th><th>Düşüş</th><th>Güncel Fiyat</th>
+                        <th>Toparlanma</th><th>Ne Zamandır</th><th>Durum</th><th>Sıkışma</th>
+                    </tr>
+                </thead>
+                <tbody id="signals-body">
+                    <tr><td colspan="8"><div class="empty-state"><span class="big-emoji">◎</span>Henüz veri yok. Yukarıdaki "Bugünü Tara" butonuna bas.</div></td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="section">
+        <div class="section-head">
+            <h2>📈 Bugünün En Çok Artanları</h2>
+            <span class="count-chip" id="top30-date-chip">-</span>
+        </div>
+        <div class="section-desc">Binance Futures'ta şu an en çok artan 30 coin — henüz bir sinyal değil, anlık durum.</div>
+        <div class="card">
+            <table>
+                <thead><tr><th>#</th><th>Coin</th><th>Değişim</th><th>Fiyat</th><th>Hacim (24s)</th></tr></thead>
+                <tbody id="top30-body">
+                    <tr><td colspan="5"><div class="empty-state"><span class="big-emoji">◎</span>Henüz veri yok.</div></td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="section">
+        <div class="section-head">
+            <h2>✓ Doğrulanmış Tahminler</h2>
+            <span class="count-chip" id="confirmed-count">0 kayıt</span>
+        </div>
+        <div class="section-desc">Daha önce bu listede "aday" olarak görünüp gerçekten tekrar patlayan coinler — sistemin isabet geçmişi.</div>
+        <div class="card">
+            <table>
+                <thead><tr><th>Coin</th><th>İlk Patlama</th><th>Düşüş</th><th>Tekrar Patlama</th><th>Yeni Artış</th></tr></thead>
+                <tbody id="confirmed-body">
+                    <tr><td colspan="5"><div class="empty-state">Henüz doğrulanmış bir tahmin yok.</div></td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <details class="advanced">
+        <summary>⚙ İleri düzey ayarlar</summary>
+        <div class="settings-grid">
+            <label>Patlama eşiği (%)<input id="cfg-pump" type="number" value="20"></label>
+            <label>Geri çekilme eşiği (%)<input id="cfg-pullback" type="number" value="5"></label>
+            <label>Pullback penceresi (gün)<input id="cfg-pullback-days" type="number" value="4"></label>
+            <label>Tekrar patlama eşiği (%)<input id="cfg-reentry" type="number" value="10"></label>
+            <label>Tekrar patlama penceresi (gün)<input id="cfg-reentry-days" type="number" value="7"></label>
+            <label>Düşüş en fazla kaç gün önce olsun<input id="cfg-near-term" type="number" value="2"></label>
+        </div>
+    </details>
+
+    <footer class="disclaimer">
+        Bu bir yatırım tavsiyesi değildir, sadece geçmiş fiyat hareketlerine bakan bir izleme aracıdır.
+        Veriler bu tarayıcıda (localStorage) saklanır — başka bir cihazda sıfırdan başlar. Otomatik
+        çalışmaz, güncel kalması için her gün "Bugünü Tara" butonuna basman gerekir.
+    </footer>
+
+</div>
+
+<!-- Detay Pop-up (Modal) -->
+<div class="modal-overlay" id="modal-overlay" onclick="if(event.target===this) closeModal()">
+    <div class="modal-box">
+        <button class="modal-close" onclick="closeModal()">×</button>
+        <div id="modal-content"><div class="modal-loading">Yükleniyor...</div></div>
+    </div>
+</div>
+
+<script>
+const API_BASE = "https://fapi.binance.com";
+const TOP_N = 30;
+const WATCHLIST_RETENTION_DAYS = 14;
+
+const store = {
+    get(key, fallback) {
+        try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; }
+        catch (e) { return fallback; }
+    },
+    set(key, value) { localStorage.setItem(key, JSON.stringify(value)); }
+};
+
+const KEYS = {
+    snapshots: "pumpwatch_snapshots",
+    klines: "pumpwatch_klines",
+    watchlist: "pumpwatch_watchlist",
+    signals: "pumpwatch_signals"
+};
+
+function todayStr() { return new Date().toISOString().slice(0, 10); }
+
+function setStatus(msg, type) {
+    const el = document.getElementById("status-msg");
+    el.textContent = msg;
+    el.className = type || "";
+}
+
+async function fetch24hrTickers() {
+    const res = await fetch(API_BASE + "/fapi/v1/ticker/24hr");
+    if (!res.ok) throw new Error("Binance'a bağlanamadım (hata kodu: " + res.status + ")");
+    const data = await res.json();
+    return data
+        .filter(t => t.symbol.endsWith("USDT") && !t.symbol.includes("_"))
+        .map(t => ({
+            symbol: t.symbol,
+            changePercent: parseFloat(t.priceChangePercent),
+            price: parseFloat(t.lastPrice),
+            volume: parseFloat(t.quoteVolume)
+        }));
+}
+
+async function fetchDailyKlines(symbol, limit) {
+    const url = `${API_BASE}/fapi/v1/klines?symbol=${symbol}&interval=1d&limit=${limit}`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error("Gecmis veri alinamadi: " + symbol);
+    const arr = await res.json();
+    return arr.map(k => {
+        const openTime = k[0];
+        const open = parseFloat(k[1]);
+        const high = parseFloat(k[2]);
+        const close = parseFloat(k[4]);
+        const date = new Date(openTime).toISOString().slice(0, 10);
+        const changePercent = open === 0 ? 0 : ((close - open) / open) * 100;
+        return { date, close, high, changePercent };
+    });
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+async function runScan() {
+    const btn = document.getElementById("scan-btn");
+    btn.disabled = true;
+    setStatus("⏳ Binance'tan bugünkü veriler alınıyor...");
+
+    try {
+        const today = todayStr();
+        const tickers = await fetch24hrTickers();
+        tickers.sort((a, b) => b.changePercent - a.changePercent);
+        const top30 = tickers.slice(0, TOP_N);
+
+        const snapshots = store.get(KEYS.snapshots, {});
+        snapshots[today] = top30;
+        store.set(KEYS.snapshots, snapshots);
+
+        const watchlist = store.get(KEYS.watchlist, {});
+        for (const t of top30) {
+            if (!watchlist[t.symbol]) watchlist[t.symbol] = { firstSeen: today, lastSeen: today };
+            else watchlist[t.symbol].lastSeen = today;
+        }
+        for (const sym of Object.keys(watchlist)) {
+            const daysSince = (new Date(today) - new Date(watchlist[sym].lastSeen)) / 86400000;
+            if (daysSince > WATCHLIST_RETENTION_DAYS) delete watchlist[sym];
+        }
+        store.set(KEYS.watchlist, watchlist);
+
+        renderTop30();
+
+        const symbols = Object.keys(watchlist);
+        const klinesStore = store.get(KEYS.klines, {});
+        let done = 0;
+        for (const symbol of symbols) {
+            try {
+                const klines = await fetchDailyKlines(symbol, WATCHLIST_RETENTION_DAYS + 4);
+                if (!klinesStore[symbol]) klinesStore[symbol] = {};
+                for (const k of klines) {
+                    klinesStore[symbol][k.date] = { close: k.close, high: k.high, changePercent: k.changePercent };
+                }
+            } catch (e) { console.warn(e.message); }
+            done++;
+            setStatus(`⏳ Coin geçmişleri inceleniyor... (${done}/${symbols.length})`);
+            await sleep(120);
+        }
+        store.set(KEYS.klines, klinesStore);
+
+        recalcSignals();
+        setStatus(`✅ Tamamlandı. ${top30.length} coin kaydedildi, ${symbols.length} sembol analiz edildi.`, "ok");
+    } catch (e) {
+        console.error(e);
+        setStatus("❌ Hata: " + e.message, "error");
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+function getConfig() {
+    return {
+        PUMP_THRESHOLD: parseFloat(document.getElementById("cfg-pump").value) || 20,
+        PULLBACK_MIN: parseFloat(document.getElementById("cfg-pullback").value) || 5,
+        PULLBACK_WINDOW_DAYS: parseInt(document.getElementById("cfg-pullback-days").value) || 4,
+        REENTRY_THRESHOLD: parseFloat(document.getElementById("cfg-reentry").value) || 10,
+        REENTRY_WINDOW_DAYS: parseInt(document.getElementById("cfg-reentry-days").value) || 7,
+        NEAR_TERM_DAYS: parseInt(document.getElementById("cfg-near-term").value) || 2
+    };
+}
+
+function recalcSignals() {
+    const cfg = getConfig();
+    const klinesStore = store.get(KEYS.klines, {});
+    const signals = {};
+
+    for (const symbol of Object.keys(klinesStore)) {
+        const dateMap = klinesStore[symbol];
+        const dates = Object.keys(dateMap).sort();
+        const rows = dates.map(d => ({ date: d, ...dateMap[d] }));
+        const n = rows.length;
+
+        for (let i = 0; i < n; i++) {
+            if (rows[i].changePercent < cfg.PUMP_THRESHOLD) continue;
+            const pumpDate = rows[i].date;
+            const pumpHigh = rows[i].high;
+            const pumpChange = rows[i].changePercent;
+
+            let pullbackIdx = null, pullbackPct = 0;
+            for (let j = i + 1; j < n && j <= i + cfg.PULLBACK_WINDOW_DAYS; j++) {
+                const drawdown = ((pumpHigh - rows[j].close) / pumpHigh) * 100;
+                if (drawdown >= cfg.PULLBACK_MIN) { pullbackIdx = j; pullbackPct = drawdown; break; }
+            }
+            if (pullbackIdx === null) continue;
+
+            let reentryIdx = null;
+            for (let k = pullbackIdx + 1; k < n && k <= i + cfg.REENTRY_WINDOW_DAYS; k++) {
+                if (rows[k].changePercent >= cfg.REENTRY_THRESHOLD) { reentryIdx = k; break; }
+            }
+
+            let status, reentryDate = null, reentryPct = null;
+            if (reentryIdx !== null) {
+                status = "CONFIRMED";
+                reentryDate = rows[reentryIdx].date;
+                reentryPct = rows[reentryIdx].changePercent;
+            } else {
+                const daysSincePump = (new Date(todayStr()) - new Date(pumpDate)) / 86400000;
+                if (daysSincePump > cfg.REENTRY_WINDOW_DAYS) continue;
+                status = "WATCHING";
+            }
+
+            signals[symbol + "_" + pumpDate] = {
+                symbol, pumpDate, pumpChange, pumpHigh, pullbackPct,
+                pullbackDate: rows[pullbackIdx].date, pullbackPrice: rows[pullbackIdx].close,
+                status, reentryDate, reentryPct
+            };
+        }
+    }
+
+    store.set(KEYS.signals, signals);
+    renderSignals();
+}
+
+function latestClose(klinesStore, symbol) {
+    const dateMap = klinesStore[symbol];
+    if (!dateMap) return null;
+    const dates = Object.keys(dateMap).sort();
+    if (!dates.length) return null;
+    return dateMap[dates[dates.length - 1]].close;
+}
+
+function renderTop30() {
+    const snapshots = store.get(KEYS.snapshots, {});
+    const dates = Object.keys(snapshots).sort();
+    const latestDate = dates[dates.length - 1];
+    const body = document.getElementById("top30-body");
+    document.getElementById("top30-date-chip").textContent = latestDate || "veri yok";
+
+    if (!latestDate) {
+        body.innerHTML = '<tr><td colspan="5"><div class="empty-state"><span class="big-emoji">◎</span>Henüz veri yok.</div></td></tr>';
+        return;
+    }
+
+    const rows = snapshots[latestDate];
+    body.innerHTML = rows.map((r, i) => `
+        <tr onclick="openCoinAnalysis('${r.symbol}')">
+            <td class="num" data-label="#">${i + 1}</td>
+            <td class="sym" data-label="Coin">${r.symbol}</td>
+            <td class="${r.changePercent >= 0 ? 'pos' : 'neg'}" data-label="Değişim">${r.changePercent >= 0 ? '+' : ''}${r.changePercent.toFixed(1)}%</td>
+            <td class="num" data-label="Fiyat">$${r.price}</td>
+            <td class="num" data-label="Hacim (24s)">$${Math.round(r.volume).toLocaleString('tr-TR')}</td>
+        </tr>
+    `).join('');
+}
+
+function renderSignals() {
+    const cfg = getConfig();
+    const signals = store.get(KEYS.signals, {});
+    const klinesStore = store.get(KEYS.klines, {});
+
+    const snapshots = store.get(KEYS.snapshots, {});
+    const dates = Object.keys(snapshots).sort();
+    const today = todayStr();
+    const latestDate = dates[dates.length - 1];
+    const todaysSymbols = new Set((latestDate ? snapshots[latestDate] : []).map(r => r.symbol));
+    const isTodaysSnapshotFresh = latestDate === today;
+
+    const watchingList = [];
+    const confirmedList = [];
+
+    for (const sig of Object.values(signals)) {
+        if (sig.status === "CONFIRMED") {
+            confirmedList.push(sig);
+        } else if (sig.status === "WATCHING") {
+            if (isTodaysSnapshotFresh && todaysSymbols.has(sig.symbol)) continue;
+            const daysSincePullback = Math.round((new Date(today) - new Date(sig.pullbackDate)) / 86400000);
+            if (daysSincePullback > cfg.NEAR_TERM_DAYS) continue;
+            sig._daysSincePullback = daysSincePullback;
+            sig._currentPrice = latestClose(klinesStore, sig.symbol);
+            sig._recoveryPct = (sig._currentPrice != null && sig.pullbackPrice)
+                ? ((sig._currentPrice - sig.pullbackPrice) / sig.pullbackPrice) * 100 : null;
+            watchingList.push(sig);
+        }
+    }
+
+    watchingList.sort((a, b) => a._daysSincePullback - b._daysSincePullback);
+    confirmedList.sort((a, b) => (b.reentryDate || "").localeCompare(a.reentryDate || ""));
+
+    document.getElementById("watching-count").textContent = watchingList.length + " aday";
+    document.getElementById("confirmed-count").textContent = confirmedList.length + " kayıt";
+
+    // --- Aday listesi ---
+    const body = document.getElementById("signals-body");
+    if (!watchingList.length) {
+        body.innerHTML = '<tr><td colspan="8"><div class="empty-state"><span class="big-emoji">◎</span>Şu an "sıcak" bir aday yok. Ya hiç veri toplanmadı, ya da uygun bir coin bulunamadı.</div></td></tr>';
+    } else {
+        body.innerHTML = watchingList.map(r => {
+            let chipClass, chipLabel;
+            if (r._daysSincePullback === 0) { chipClass = "chip-hot"; chipLabel = "Bugün-Yarın"; }
+            else if (r._daysSincePullback === 1) { chipClass = "chip-warm"; chipLabel = "1-2 Gün İçinde"; }
+            else { chipClass = "chip-mild"; chipLabel = "Yakın Zamanda"; }
+
+            const recoveryHtml = r._recoveryPct != null
+                ? `<span class="${r._recoveryPct >= 0 ? 'pos' : 'neg'}">${r._recoveryPct >= 0 ? '+' : ''}${r._recoveryPct.toFixed(1)}%</span>`
+                : '<span class="num" style="color:var(--muted-dim)">-</span>';
+
+            const rowId = "sqcell-" + r.symbol + "-" + r.pumpDate;
+
+            return `
+                <tr onclick="openCoinAnalysis('${r.symbol}')">
+                    <td data-label="Coin"><div class="sym">${r.symbol}</div></td>
+                    <td data-label="Patlama">
+                        <span class="pos">+${r.pumpChange.toFixed(1)}%</span>
+                        <div class="sub-cell">${r.pumpDate}</div>
+                    </td>
+                    <td data-label="Düşüş">
+                        <span class="neg">-${r.pullbackPct.toFixed(1)}%</span>
+                        <div class="sub-cell">${r.pullbackDate}</div>
+                    </td>
+                    <td class="num" data-label="Güncel Fiyat">${r._currentPrice != null ? '$' + r._currentPrice : '-'}</td>
+                    <td data-label="Toparlanma">${recoveryHtml}</td>
+                    <td class="num" data-label="Ne Zamandır">${r._daysSincePullback} gün</td>
+                    <td data-label="Durum"><span class="status-chip ${chipClass}"><span class="dot"></span>${chipLabel}</span></td>
+                    <td data-label="Sıkışma" id="${rowId}"><span class="num" style="color:var(--muted-dim);">⏳</span></td>
+                </tr>
+            `;
+        }).join('');
+
+        // Arka planda her aday icin klasik sikisma kontrolu yap (sirayla, rate-limit'e takilmamak icin)
+        runBackgroundSqueezeChecks(watchingList);
+    }
+
+    // --- Dogrulanmis tahminler ---
+    const confBody = document.getElementById("confirmed-body");
+    if (!confirmedList.length) {
+        confBody.innerHTML = '<tr><td colspan="5"><div class="empty-state">Henüz doğrulanmış bir tahmin yok.</div></td></tr>';
+    } else {
+        confBody.innerHTML = confirmedList.map(r => `
+            <tr onclick="openCoinAnalysis('${r.symbol}')">
+                <td data-label="Coin"><div class="sym">${r.symbol}</div></td>
+                <td data-label="İlk Patlama"><span class="pos">+${r.pumpChange.toFixed(1)}%</span><div class="sub-cell">${r.pumpDate}</div></td>
+                <td data-label="Düşüş"><span class="neg">-${r.pullbackPct.toFixed(1)}%</span></td>
+                <td data-label="Tekrar Patlama">${r.reentryDate}</td>
+                <td data-label="Yeni Artış"><span class="status-chip chip-confirmed"><span class="dot"></span>+${r.reentryPct.toFixed(1)}%</span></td>
+            </tr>
+        `).join('');
+    }
+}
+
+function clearAll() {
+    if (!confirm("Tüm kaydedilen veriler silinecek, sıfırdan başlayacaksın. Emin misin?")) return;
+    Object.values(KEYS).forEach(k => localStorage.removeItem(k));
+    renderTop30();
+    renderSignals();
+    setStatus("🗑 Her şey sıfırlandı.", "ok");
+}
+
+// Ana tablodaki her aday icin klasik squeeze kontrolunu arka planda, sirayla calistirir
+async function runBackgroundSqueezeChecks(watchingList) {
+    for (const r of watchingList) {
+        const cellId = "sqcell-" + r.symbol + "-" + r.pumpDate;
+        const cell = document.getElementById(cellId);
+        if (!cell) continue; // kullanici baska sayfaya gecmis olabilir
+
+        try {
+            const [dailyKlines35, oiHist48, fundingHist] = await Promise.all([
+                safeFetchJson(`${API_BASE}/fapi/v1/klines?symbol=${r.symbol}&interval=1d&limit=35`),
+                safeFetchJson(`${API_BASE}/futures/data/openInterestHist?symbol=${r.symbol}&period=1h&limit=49`),
+                safeFetchJson(`${API_BASE}/fapi/v1/fundingRate?symbol=${r.symbol}&limit=1`)
+            ]);
+            const fundingRate = fundingHist && fundingHist.length ? parseFloat(fundingHist[0].fundingRate) * 100 : null;
+            const sq = computeClassicSqueeze(dailyKlines35, oiHist48, fundingRate);
+
+            const freshCell = document.getElementById(cellId);
+            if (!freshCell) continue;
+
+            if (!sq.available) {
+                freshCell.innerHTML = '<span class="num" style="color:var(--muted-dim);">–</span>';
+            } else if (sq.allPass) {
+                freshCell.innerHTML = '<span class="status-chip chip-hot"><span class="dot"></span>🎯 Var</span>';
+            } else {
+                const passCount = [sq.bbSqueeze, (sq.oiRising && sq.priceFlat), sq.fundingNeg].filter(Boolean).length;
+                freshCell.innerHTML = `<span class="num" style="color:var(--muted-dim);">${passCount}/3</span>`;
+            }
+        } catch (e) {
+            const freshCell = document.getElementById(cellId);
+            if (freshCell) freshCell.innerHTML = '<span class="num" style="color:var(--muted-dim);">–</span>';
+        }
+        await sleep(150);
+    }
+}
+
+// ================= CANLI DETAY ANALIZI (Modal) =================
+
+async function openCoinAnalysis(symbol) {
+    const overlay = document.getElementById("modal-overlay");
+    const content = document.getElementById("modal-content");
+    overlay.classList.add("open");
+    content.innerHTML = `<div class="modal-loading">⏳ ${symbol} için canlı veri alınıyor...</div>`;
+
+    try {
+        const data = await fetchLiveAnalysisData(symbol);
+        content.innerHTML = renderAnalysisHtml(symbol, data);
+    } catch (e) {
+        console.error(e);
+        content.innerHTML = `
+            <div class="modal-title">${symbol}</div>
+            <div class="verdict-box verdict-bearish">
+                <div class="verdict-title">Veri alınamadı</div>
+                Binance'ten canlı veri çekilirken bir hata oluştu: ${e.message}<br><br>
+                Bu bazen çok yeni listelenen coinlerde ya da geçici bir bağlantı sorununda olur.
+            </div>
+        `;
+    }
+}
+
+function closeModal() {
+    document.getElementById("modal-overlay").classList.remove("open");
+}
+
+async function safeFetchJson(url) {
+    try {
+        const res = await fetch(url);
+        if (!res.ok) return null;
+        return await res.json();
+    } catch (e) { return null; }
+}
+
+async function fetchLiveAnalysisData(symbol) {
+    const base = API_BASE;
+    const [ticker, oiNow, oiHist, premium, fundingHist, globalLS, topAccLS, topPosLS, takerLS, dailyKlines35, oiHist48] = await Promise.all([
+        safeFetchJson(`${base}/fapi/v1/ticker/24hr?symbol=${symbol}`),
+        safeFetchJson(`${base}/fapi/v1/openInterest?symbol=${symbol}`),
+        safeFetchJson(`${base}/futures/data/openInterestHist?symbol=${symbol}&period=1h&limit=25`),
+        safeFetchJson(`${base}/fapi/v1/premiumIndex?symbol=${symbol}`),
+        safeFetchJson(`${base}/fapi/v1/fundingRate?symbol=${symbol}&limit=1`),
+        safeFetchJson(`${base}/futures/data/globalLongShortAccountRatio?symbol=${symbol}&period=1h&limit=25`),
+        safeFetchJson(`${base}/futures/data/topLongShortAccountRatio?symbol=${symbol}&period=1h&limit=25`),
+        safeFetchJson(`${base}/futures/data/topLongShortPositionRatio?symbol=${symbol}&period=1h&limit=25`),
+        safeFetchJson(`${base}/futures/data/takerlongshortRatio?symbol=${symbol}&period=1h&limit=25`),
+        safeFetchJson(`${base}/fapi/v1/klines?symbol=${symbol}&interval=1d&limit=35`),
+        safeFetchJson(`${base}/futures/data/openInterestHist?symbol=${symbol}&period=1h&limit=49`)
+    ]);
+    if (!ticker) throw new Error("Fiyat verisi alınamadı");
+    return { ticker, oiNow, oiHist, premium, fundingHist, globalLS, topAccLS, topPosLS, takerLS, dailyKlines35, oiHist48 };
+}
+
+/**
+ * Klasik short-squeeze kurulumu:
+ * 1) Gunluk Bollinger Bandi daralmis (sikisma)
+ * 2) Son 48 saatte Acik Faiz (OI) artarken fiyat nispeten yatay
+ * 3) Funding negatif (short'lar odiyor)
+ * Uc kosul birden saglaniyorsa, biriken short pozisyonlarin squeeze ile
+ * patlatilabilecegine dair klasik bir habercidir.
+ */
+function computeClassicSqueeze(dailyKlines35, oiHist48, fundingRate) {
+    if (!dailyKlines35 || dailyKlines35.length < 21) {
+        return { available: false };
+    }
+    const closes = dailyKlines35.map(k => parseFloat(k[4]));
+    const n = closes.length;
+
+    function bbWidthAt(idx) {
+        if (idx < 19) return null;
+        const window = closes.slice(idx - 19, idx + 1);
+        const mean = window.reduce((a, b) => a + b, 0) / window.length;
+        const variance = window.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / window.length;
+        const std = Math.sqrt(variance);
+        return ((mean + 2 * std) - (mean - 2 * std)) / mean * 100;
+    }
+
+    const widths = [];
+    for (let i = 19; i < n; i++) {
+        const w = bbWidthAt(i);
+        if (w != null) widths.push(w);
+    }
+    if (widths.length < 6) return { available: false };
+
+    const currentWidth = widths[widths.length - 1];
+    const historicalAvg = widths.slice(0, -1).reduce((a, b) => a + b, 0) / (widths.length - 1);
+    const bbSqueeze = currentWidth < historicalAvg * 0.6;
+
+    const priceNow = closes[n - 1];
+    const price48hAgo = closes[n - 3] != null ? closes[n - 3] : closes[0];
+    const price48hChangePct = ((priceNow - price48hAgo) / price48hAgo) * 100;
+    const priceFlat = Math.abs(price48hChangePct) <= 4;
+
+    let oi48Change = null;
+    if (oiHist48 && oiHist48.length >= 2) {
+        const oldest = parseFloat(oiHist48[0].sumOpenInterest);
+        const newest = parseFloat(oiHist48[oiHist48.length - 1].sumOpenInterest);
+        oi48Change = oldest === 0 ? null : ((newest - oldest) / oldest) * 100;
+    }
+    const oiRising = oi48Change != null && oi48Change > 5;
+    const oiFlatCombo = oiRising && priceFlat;
+
+    const fundingNeg = fundingRate != null && fundingRate < -0.005;
+
+    return {
+        available: true,
+        allPass: bbSqueeze && oiFlatCombo && fundingNeg,
+        bbSqueeze, currentWidth, historicalAvg,
+        oiRising, oi48Change, priceFlat, price48hChangePct,
+        fundingNeg, fundingRate
+    };
+}
+
+function renderSqueezeSection(sq) {
+    if (!sq.available) {
+        return `
+            <div class="modal-section-title">🎯 Klasik Short-Squeeze Kurulumu</div>
+            <div class="verdict-box verdict-neutral" style="margin-bottom:20px;">
+                Bu üç şartı kontrol etmek için yeterli geçmiş veri yok (muhtemelen çok yeni listelenmiş
+                bir sözleşme). Değerlendirme yapılamıyor.
+            </div>
+        `;
+    }
+    const checks = [
+        { pass: sq.bbSqueeze, label: "Günlük Bollinger bandı daralmış (sıkışma)",
+          detail: `Şu anki bant genişliği: %${sq.currentWidth.toFixed(1)} · Son dönem ortalaması: %${sq.historicalAvg.toFixed(1)}` },
+        { pass: sq.oiRising && sq.priceFlat, label: "Son 48 saatte OI artarken fiyat nispeten yatay",
+          detail: `OI değişimi: ${sq.oi48Change != null ? (sq.oi48Change >= 0 ? '+' : '') + sq.oi48Change.toFixed(1) + '%' : 'veri yok'} · Fiyat değişimi (48s): ${sq.price48hChangePct >= 0 ? '+' : ''}${sq.price48hChangePct.toFixed(1)}%` },
+        { pass: sq.fundingNeg, label: "Funding negatif (short'lar ödüyor)",
+          detail: `Güncel funding: ${sq.fundingRate != null ? sq.fundingRate.toFixed(4) + '%' : 'veri yok'}` }
+    ];
+
+    const verdictClass = sq.allPass ? "verdict-bullish" : "verdict-neutral";
+    const verdictTitle = sq.allPass
+        ? "🎯 Üç şart da sağlanıyor — klasik squeeze habercisi mevcut"
+        : "Şartlar tam sağlanmıyor";
+    const verdictText = sq.allPass
+        ? "Biriken short pozisyonların bir fiyat kırılımında zorlanıp squeeze ile patlatılması için klasik önkoşullar bir arada görünüyor."
+        : "Bu, listenin boş kalabileceği ya da bu coinin şu an için bu özel kurulumu sağlamadığı anlamına gelir — bu normaldir, her aday bu sıkı seti karşılamaz.";
+
+    return `
+        <div class="modal-section-title">🎯 Klasik Short-Squeeze Kurulumu</div>
+        <div class="verdict-box ${verdictClass}" style="margin-bottom:20px;">
+            <div class="verdict-title">${verdictTitle}</div>
+            ${verdictText}
+            <ul style="margin:12px 0 0 0; padding:0; list-style:none;">
+                ${checks.map(c => `
+                    <li style="display:flex; gap:8px; align-items:flex-start; margin-bottom:8px;">
+                        <span style="flex-shrink:0;">${c.pass ? '✅' : '❌'}</span>
+                        <span>${c.label}<br><span style="color:var(--muted); font-size:12px;">${c.detail}</span></span>
+                    </li>
+                `).join('')}
+            </ul>
+        </div>
+    `;
+}
+
+
+
+function pctChange(oldV, newV) {
+    if (oldV === 0 || oldV == null || newV == null) return null;
+    return ((newV - oldV) / oldV) * 100;
+}
+
+function renderAnalysisHtml(symbol, d) {
+    const price = parseFloat(d.ticker.lastPrice);
+    const change24h = parseFloat(d.ticker.priceChangePercent);
+    const volume24h = parseFloat(d.ticker.quoteVolume);
+
+    let oiNowVal = d.oiNow ? parseFloat(d.oiNow.openInterest) : null;
+    let oiUsdNow = oiNowVal != null ? oiNowVal * price : null;
+    let oiChangePct = null;
+    if (d.oiHist && d.oiHist.length >= 2) {
+        const oldest = parseFloat(d.oiHist[0].sumOpenInterest);
+        const newest = parseFloat(d.oiHist[d.oiHist.length - 1].sumOpenInterest);
+        oiChangePct = pctChange(oldest, newest);
+    }
+
+    let fundingRate = null;
+    if (d.fundingHist && d.fundingHist.length) fundingRate = parseFloat(d.fundingHist[0].fundingRate) * 100;
+    else if (d.premium) fundingRate = parseFloat(d.premium.lastFundingRate) * 100;
+
+    const squeeze = computeClassicSqueeze(d.dailyKlines35, d.oiHist48, fundingRate);
+
+    const globalRatio = d.globalLS && d.globalLS.length ? parseFloat(d.globalLS[d.globalLS.length - 1].longShortRatio) : null;
+    const topAccRatio = d.topAccLS && d.topAccLS.length ? parseFloat(d.topAccLS[d.topAccLS.length - 1].longShortRatio) : null;
+    const topPosRatio = d.topPosLS && d.topPosLS.length ? parseFloat(d.topPosLS[d.topPosLS.length - 1].longShortRatio) : null;
+    const takerRatio = d.takerLS && d.takerLS.length ? parseFloat(d.takerLS[d.takerLS.length - 1].buySellRatio) : null;
+
+    function fundingNote(f) {
+        if (f == null) return "Veri yok";
+        if (f > 0.05) return "Çok yüksek pozitif — long'lar short'lara ciddi ödeme yapıyor, piyasa aşırı iyimser olabilir (long sıkışması riski)";
+        if (f > 0.01) return "Pozitif — long pozisyonlar hafif ağır basıyor";
+        if (f < -0.05) return "Çok negatif — short'lar long'lara ciddi ödeme yapıyor, piyasa aşırı kötümser (short sıkışması potansiyeli var)";
+        if (f < -0.01) return "Negatif — short pozisyonlar hafif ağır basıyor";
+        return "Nötr — long ve short dengede";
+    }
+    function ratioNote(r, label) {
+        if (r == null) return "Veri yok";
+        if (r > 2) return `Çok fazla ${label} long'da — kalabalık long pozisyon, olası düzeltme riski`;
+        if (r > 1.3) return `${label} ağırlıklı long`;
+        if (r < 0.5) return `Çok fazla ${label} short'ta — kalabalık short pozisyon, olası short sıkışması potansiyeli`;
+        if (r < 0.77) return `${label} ağırlıklı short`;
+        return `${label} dengeli`;
+    }
+    function oiNote(pct) {
+        if (pct == null) return "Veri yok";
+        if (pct > 15) return "Açık pozisyon belirgin arttı — piyasaya yeni para giriyor";
+        if (pct < -15) return "Açık pozisyon belirgin azaldı — pozisyonlar kapatılıyor";
+        return "Açık pozisyon son 24 saatte çok değişmedi";
+    }
+
+    let bullishPoints = 0, bearishPoints = 0, reasons = [];
+    if (fundingRate != null) {
+        if (fundingRate < -0.02) { bullishPoints++; reasons.push("Fonlama oranı negatif (short'lar baskın) — yukarı yönlü short sıkışması için zemin var"); }
+        else if (fundingRate > 0.05) { bearishPoints++; reasons.push("Fonlama oranı yüksek pozitif — long'lar aşırı kalabalık, düzeltme riski"); }
+    }
+    if (globalRatio != null) {
+        if (globalRatio < 0.77) { bullishPoints++; reasons.push("Genel yatırımcı kitlesi short ağırlıklı — ters yönde sıkışma potansiyeli"); }
+        else if (globalRatio > 1.5) { bearishPoints++; reasons.push("Genel yatırımcı kitlesi çok fazla long — kalabalık pozisyon riski"); }
+    }
+    if (topPosRatio != null && globalRatio != null) {
+        if (topPosRatio > globalRatio * 1.3) { bullishPoints++; reasons.push("Büyük yatırımcılar küçük yatırımcılardan daha fazla long — akıllı para yukarı yönlü konumlanmış olabilir"); }
+        else if (topPosRatio < globalRatio * 0.7) { bearishPoints++; reasons.push("Büyük yatırımcılar küçük yatırımcılardan daha fazla short — akıllı para temkinli"); }
+    }
+    if (oiChangePct != null) {
+        if (oiChangePct > 10 && change24h > 0) { bullishPoints++; reasons.push("Açık pozisyon artarken fiyat da yükseliyor — momentum canlı"); }
+        if (oiChangePct < -10 && change24h > 0) { bullishPoints++; reasons.push("Açık pozisyon azalırken fiyat yükseliyor — bu genelde short kapanışı (short sıkışması) demektir"); }
+        if (oiChangePct > 10 && change24h < 0) { bearishPoints++; reasons.push("Açık pozisyon artarken fiyat düşüyor — yeni satıcılar pozisyon açıyor"); }
+    }
+    if (takerRatio != null) {
+        if (takerRatio > 1.1) { bullishPoints++; reasons.push("Piyasa emirleriyle alım baskısı satımdan fazla — kısa vadeli momentum yukarı"); }
+        else if (takerRatio < 0.9) { bearishPoints++; reasons.push("Piyasa emirleriyle satım baskısı alımdan fazla — kısa vadeli momentum aşağı"); }
+    }
+
+    let verdictClass, verdictTitle, verdictText;
+    if (reasons.length === 0) {
+        verdictClass = "verdict-neutral"; verdictTitle = "Yeterli veri yok";
+        verdictText = "Bu coin için long/short ve açık pozisyon verileri henüz yetersiz. Net bir değerlendirme yapılamıyor.";
+    } else if (bullishPoints > bearishPoints) {
+        verdictClass = "verdict-bullish"; verdictTitle = "Yukarı yönlü sıkışma potansiyeli mevcut";
+        verdictText = "Piyasada short tarafında bir baskı birikmiş olabilir; fiyat yukarı kırılırsa bu pozisyonların kapanması hareketi hızlandırabilir. Bu bir garanti değil.";
+    } else if (bearishPoints > bullishPoints) {
+        verdictClass = "verdict-bearish"; verdictTitle = "Kalabalık long / düzeltme riski";
+        verdictText = "Long tarafında kalabalık bir pozisyonlanma var. Ani bir düşüş bu pozisyonları zorlayıp sert bir aşağı hareket tetikleyebilir.";
+    } else {
+        verdictClass = "verdict-neutral"; verdictTitle = "Karışık sinyaller";
+        verdictText = "Bazı göstergeler yukarı, bazıları aşağı yönlü baskıya işaret ediyor. Net bir yön çıkmıyor.";
+    }
+
+    return `
+        <div class="modal-title">${symbol}</div>
+        <div class="modal-subtitle">$${price} &nbsp;·&nbsp; <span class="${change24h >= 0 ? 'pos' : 'neg'}">${change24h >= 0 ? '+' : ''}${change24h.toFixed(2)}%</span> (24s) &nbsp;·&nbsp; Hacim $${Math.round(volume24h).toLocaleString('tr-TR')}</div>
+
+        ${renderSqueezeSection(squeeze)}
+
+        <div class="modal-section-title">📋 Genel Değerlendirme (Ek Göstergeler)</div>
+        <div class="verdict-box ${verdictClass}">
+            <div class="verdict-title">${verdictTitle}</div>
+            ${verdictText}
+            ${reasons.length ? '<ul style="margin:10px 0 0 18px; padding:0;">' + reasons.map(r => `<li style="margin-bottom:4px;">${r}</li>`).join('') + '</ul>' : ''}
+        </div>
+
+        <div class="modal-section-title">Açık Pozisyon</div>
+        <div class="metric-grid">
+            <div class="metric-box">
+                <div class="metric-label">Güncel</div>
+                <div class="metric-value">${oiUsdNow != null ? '$' + Math.round(oiUsdNow).toLocaleString('tr-TR') : '-'}</div>
+            </div>
+            <div class="metric-box">
+                <div class="metric-label">24 Saatlik Değişim</div>
+                <div class="metric-value ${oiChangePct > 0 ? 'pos' : oiChangePct < 0 ? 'neg' : ''}">${oiChangePct != null ? (oiChangePct >= 0 ? '+' : '') + oiChangePct.toFixed(1) + '%' : '-'}</div>
+                <div class="metric-note">${oiNote(oiChangePct)}</div>
+            </div>
+        </div>
+
+        <div class="modal-section-title">Fonlama Oranı</div>
+        <div class="metric-grid">
+            <div class="metric-box" style="grid-column: span 2;">
+                <div class="metric-value ${fundingRate > 0 ? 'neg' : fundingRate < 0 ? 'pos' : ''}">${fundingRate != null ? fundingRate.toFixed(4) + '%' : '-'}</div>
+                <div class="metric-note">${fundingNote(fundingRate)}</div>
+            </div>
+        </div>
+
+        <div class="modal-section-title">Long / Short Oranları</div>
+        <div class="metric-grid">
+            <div class="metric-box">
+                <div class="metric-label">Genel Yatırımcı</div>
+                <div class="metric-value">${globalRatio != null ? globalRatio.toFixed(2) : '-'}</div>
+                <div class="metric-note">${ratioNote(globalRatio, "küçük yatırımcı")}</div>
+            </div>
+            <div class="metric-box">
+                <div class="metric-label">Büyük Yatırımcı (Top Trader)</div>
+                <div class="metric-value">${topPosRatio != null ? topPosRatio.toFixed(2) : (topAccRatio != null ? topAccRatio.toFixed(2) : '-')}</div>
+                <div class="metric-note">${ratioNote(topPosRatio != null ? topPosRatio : topAccRatio, "büyük yatırımcı")}</div>
+            </div>
+            <div class="metric-box" style="grid-column: span 2;">
+                <div class="metric-label">Piyasa Emri (Taker) Alım/Satım</div>
+                <div class="metric-value">${takerRatio != null ? takerRatio.toFixed(2) : '-'}</div>
+                <div class="metric-note">1'den büyükse alım baskın, küçükse satım baskın.</div>
+            </div>
+        </div>
+
+        <div class="modal-disclaimer">
+            Bu değerlendirme Binance Futures'ın herkese açık verilerine bakan basit bir kural setidir;
+            yatırım tavsiyesi değildir. Oranlar 1 saatlik verilerle hesaplanır ve hızla değişebilir.
+        </div>
+    `;
+}
+
+renderTop30();
+renderSignals();
+</script>
+
+</body>
+</html>
