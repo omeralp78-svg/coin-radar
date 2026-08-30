@@ -336,6 +336,7 @@
                 </div>
             </div>
             <div class="icon-actions">
+                <button class="icon-btn" onclick="openDipPage()">📉 Dip Toparlanma</button>
                 <button class="icon-btn" onclick="openDatabasePage()">📚 Coin Veritabanı</button>
                 <button class="icon-btn" onclick="openOptimizerPanel()">🔬 Eşik Optimizasyonu</button>
                 <button class="icon-btn" onclick="openStatsPanel()">📊 Başarı Oranı</button>
@@ -435,6 +436,16 @@
         </div>
     </details>
 
+    <details class="advanced">
+        <summary>⚙ Dip Toparlanma ayarları (küçük ölçekli, tekrarlayan salınımlar için)</summary>
+        <div class="settings-grid">
+            <label>Düşüş eşiği (%) - kaç gün içinde ne kadar düşerse "dip" sayılsın<input id="cfg-dip-decline" type="number" value="10"></label>
+            <label>Düşüş penceresi (gün)<input id="cfg-dip-lookback" type="number" value="4"></label>
+            <label>Toparlanma eşiği (%) - dip noktasından ne kadar sıçrarsa "toparlandı" sayılsın<input id="cfg-dip-recovery" type="number" value="8"></label>
+            <label>Toparlanma penceresi (gün)<input id="cfg-dip-recovery-window" type="number" value="5"></label>
+        </div>
+    </details>
+
     <footer class="disclaimer">
         Bu bir yatırım tavsiyesi değildir, sadece geçmiş fiyat hareketlerine bakan bir izleme aracıdır.
         Sistem artık saatlik veri, ATR bazlı dinamik eşikler ve BTC korelasyon kontrolü kullanıyor —
@@ -475,6 +486,14 @@
     <div class="modal-box" style="max-width: 1200px; width: 95vw;">
         <button class="modal-close" onclick="closeDatabasePage()">×</button>
         <div id="database-content"></div>
+    </div>
+</div>
+
+<!-- Dip Toparlanma Sayfasi (kucuk olcekli, tekrarlayan salinim sinyalleri) -->
+<div class="modal-overlay" id="dip-overlay" onclick="if(event.target===this) closeDipPage()">
+    <div class="modal-box" style="max-width: 1100px; width: 95vw;">
+        <button class="modal-close" onclick="closeDipPage()">×</button>
+        <div id="dip-content"></div>
     </div>
 </div>
 
@@ -596,8 +615,10 @@ const KEYS = {
     watchlist: "pumpwatch_watchlist",
     signals: "pumpwatch_signals_v2",      // v2: saatlik + ATR + BTC alanlari icerir, eski formatla karismasin diye yeni anahtar
     config: "pumpwatch_config",           // esikler - GitHub Action otomasyonu da AYNI ayarlari kullansin diye paylasilir
+    dipSignals: "pumpwatch_dip_signals_v1", // Dip Toparlanma sinyalleri - ana patlama sinyallerinden AYRI, kendi deposu
     notified: "pumpwatch_notified",       // Telegram'a daha once bildirilmis sinyaller (GitHub Action kullanir, tekrar mesaj atmasin diye)
-    oiHistory: "pumpwatch_oi_history"     // { symbol: { "YYYY-MM-DD": acikPozisyonUsd } } - gun gun OI gecmisi (Coin Veritabani sayfasi icin)
+    oiHistory: "pumpwatch_oi_history",    // { symbol: { "YYYY-MM-DD": acikPozisyonUsd } } - gun gun OI gecmisi (Coin Veritabani sayfasi icin)
+    dipSignals: "pumpwatch_dip_signals"   // buyuk patlamadan AYRI: kucuk olcekli, tekrarlayan dus-cik (mean-reversion) sinyalleri
 };
 
 function todayStr() { return new Date().toISOString().slice(0, 10); }
@@ -905,7 +926,12 @@ function getConfig() {
         PULLBACK_WINDOW_HOURS: parseInt(document.getElementById("cfg-pullback-window-hours").value) || 96,
         REENTRY_WINDOW_HOURS: parseInt(document.getElementById("cfg-reentry-window-hours").value) || 168,
         NEAR_TERM_HOURS: parseInt(document.getElementById("cfg-near-term-hours").value) || 48,
-        ISOLATION_MULT: parseFloat(document.getElementById("cfg-isolation-mult").value) || 50
+        ISOLATION_MULT: parseFloat(document.getElementById("cfg-isolation-mult").value) || 50,
+        // Kucuk olcekli, tekrarlayan dus-cik (mean-reversion / "dip toparlanma") ayarlari - buyuk patlama ayarlarindan BAGIMSIZ
+        DIP_DECLINE_THRESHOLD: parseFloat(document.getElementById("cfg-dip-decline").value) || 10,
+        DIP_LOOKBACK_DAYS: parseInt(document.getElementById("cfg-dip-lookback").value) || 4,
+        DIP_RECOVERY_THRESHOLD: parseFloat(document.getElementById("cfg-dip-recovery").value) || 8,
+        DIP_RECOVERY_WINDOW_DAYS: parseInt(document.getElementById("cfg-dip-recovery-window").value) || 5
     };
 }
 
@@ -920,6 +946,8 @@ async function recalcSignals() {
 
     const btcMap = new Map(Object.entries(btcKlinesStore));
     const signals = {};
+    const dipSignals = {};
+    const previousDipSignals = await store.get(KEYS.dipSignals, {});
 
     for (const symbol of Object.keys(klinesStore)) {
         const dateMap = klinesStore[symbol];
@@ -931,10 +959,66 @@ async function recalcSignals() {
 
         const symbolSignals = detectSignalsForSymbol(symbol, rows, btcMap, cfg, previousSignals);
         Object.assign(signals, symbolSignals);
+
+        // Kucuk olcekli, tekrarlayan dus-cik (dip toparlanma) sinyalleri - gunluk cozunurlukte,
+        // buyuk patlama tespitinden TAMAMEN BAGIMSIZ ayrica hesaplanir.
+        const dailyRows = resampleToDailyFull(rows);
+        const symbolDipSignals = detectDipSignalsForSymbol(symbol, dailyRows, cfg, previousDipSignals);
+        Object.assign(dipSignals, symbolDipSignals);
     }
 
     await store.set(KEYS.signals, signals);
+    await store.set(KEYS.dipSignals, dipSignals);
     await renderSignals();
+}
+
+/**
+ * Kucuk olcekli, TEKRARLAYAN dus-cik (mean-reversion) orguntusunu arar. Buyuk tek seferlik
+ * patlamalardan farkli olarak burada esikler kucuk (~%10 dusus, ~%8 toparlanma) ve gunluk
+ * cozunurlukte calisir - amac "bu coin belirli bir bantta surekli inip cikiyor mu" sorusuna
+ * cevap vermek.
+ */
+function detectDipSignalsForSymbol(symbol, dailyRows, cfg, previousDipSignals) {
+    const n = dailyRows.length;
+    const signals = {};
+    if (n < cfg.DIP_LOOKBACK_DAYS + 2) return signals;
+
+    let i = cfg.DIP_LOOKBACK_DAYS;
+    while (i < n) {
+        const windowStart = Math.max(0, i - cfg.DIP_LOOKBACK_DAYS);
+        const startPrice = dailyRows[windowStart].close;
+
+        let dipIdx = windowStart, dipLow = dailyRows[windowStart].low;
+        for (let k = windowStart; k <= i; k++) {
+            if (dailyRows[k].low < dipLow) { dipLow = dailyRows[k].low; dipIdx = k; }
+        }
+        const declinePct = startPrice === 0 ? 0 : ((startPrice - dipLow) / startPrice) * 100;
+
+        if (declinePct < cfg.DIP_DECLINE_THRESHOLD) { i++; continue; }
+
+        let recoveryIdx = null, recoveryPct = null;
+        const recoveryWindowEnd = Math.min(n - 1, dipIdx + cfg.DIP_RECOVERY_WINDOW_DAYS);
+        for (let k = dipIdx + 1; k <= recoveryWindowEnd; k++) {
+            const bouncePct = dipLow === 0 ? 0 : ((dailyRows[k].high - dipLow) / dipLow) * 100;
+            if (bouncePct >= cfg.DIP_RECOVERY_THRESHOLD) { recoveryIdx = k; recoveryPct = bouncePct; break; }
+        }
+
+        let status;
+        if (recoveryIdx !== null) status = "CONFIRMED";
+        else {
+            const daysAvailable = (n - 1) - dipIdx;
+            status = daysAvailable > cfg.DIP_RECOVERY_WINDOW_DAYS ? "EXPIRED" : "WATCHING";
+        }
+
+        const key = symbol + "_dip_" + dailyRows[dipIdx].date;
+        signals[key] = {
+            symbol, dipDate: dailyRows[dipIdx].date, dipLowPrice: dipLow, declinePct,
+            status, recoveryDate: recoveryIdx !== null ? dailyRows[recoveryIdx].date : null, recoveryPct
+        };
+
+        i = (recoveryIdx !== null ? recoveryIdx : dipIdx) + 1;
+    }
+    return signals;
 }
 
 function latestClose(klinesStore, symbol) {
@@ -1692,6 +1776,133 @@ function applyOptimizedConfig(pm, plm, rm) {
     closeOptimizerPanel();
     recalcSignals();
     setStatus(`✅ Optimize edilmiş ayarlar uygulandı (Pump×${pm} / Pullback×${plm} / Reentry×${rm}) ve sinyaller yeniden hesaplandı.`, "ok");
+}
+
+// ================= DIP TOPARLANMA SAYFASI (kucuk olcekli, tekrarlayan salinim sinyalleri) =================
+
+function closeDipPage() { document.getElementById("dip-overlay").classList.remove("open"); }
+
+async function openDipPage() {
+    const overlay = document.getElementById("dip-overlay");
+    overlay.classList.add("open");
+    await renderDipPage();
+}
+
+async function renderDipPage() {
+    const content = document.getElementById("dip-content");
+    content.innerHTML = '<div class="modal-loading">⏳ Dip toparlanma verileri yükleniyor...</div>';
+
+    const dipSignals = await store.get(KEYS.dipSignals, {});
+    const snapshots = await store.get(KEYS.snapshots, {});
+    const dates = Object.keys(snapshots).sort();
+    const today = todayStr();
+    const latestDate = dates[dates.length - 1];
+    const todaysSymbols = new Set((latestDate ? snapshots[latestDate] : []).map(r => r.symbol));
+    const isTodaysSnapshotFresh = latestDate === today;
+
+    // Her sembol icin gecmiste kac kere BASARIYLA toparlandigini say - "gecerlilik takibi"
+    const confirmedCountBySymbol = {};
+    for (const sig of Object.values(dipSignals)) {
+        if (sig.status === "CONFIRMED") {
+            confirmedCountBySymbol[sig.symbol] = (confirmedCountBySymbol[sig.symbol] || 0) + 1;
+        }
+    }
+
+    const watchingList = [];
+    const confirmedList = [];
+    for (const sig of Object.values(dipSignals)) {
+        if (sig.status === "CONFIRMED") {
+            confirmedList.push(sig);
+        } else if (sig.status === "WATCHING") {
+            if (isTodaysSnapshotFresh && todaysSymbols.has(sig.symbol)) continue;
+            sig._priorSuccesses = confirmedCountBySymbol[sig.symbol] || 0;
+            watchingList.push(sig);
+        }
+    }
+    watchingList.sort((a, b) => b._priorSuccesses - a._priorSuccesses || b.dipDate.localeCompare(a.dipDate));
+    confirmedList.sort((a, b) => (b.recoveryDate || "").localeCompare(a.recoveryDate || ""));
+
+    function trackRecordBadge(count) {
+        if (count === 0) return '<span class="num" style="color:var(--muted-dim);">İlk kez</span>';
+        return `<span class="status-chip chip-confirmed"><span class="dot"></span>${count}x geçmişte tuttu</span>`;
+    }
+
+    // Genel isabet orani (bekleyenler haric - sadece sonuclanmis olanlar)
+    const confirmedTotal = Object.values(dipSignals).filter(s => s.status === "CONFIRMED").length;
+    const expiredTotal = Object.values(dipSignals).filter(s => s.status === "EXPIRED").length;
+    const resolvedTotal = confirmedTotal + expiredTotal;
+    const dipHitRate = resolvedTotal > 0 ? (confirmedTotal / resolvedTotal * 100) : null;
+
+    content.innerHTML = `
+        <div class="modal-title">📉 Dip Toparlanma Adayları</div>
+        <div class="modal-subtitle">
+            Büyük "patlama" avcısından bağımsız, küçük ölçekli ama <strong>tekrarlayan</strong> düş-çık
+            (bant içi salınım) hareketlerini yakalar. "Geçmiş Performans" sütunu, o coinin bu tarz bir
+            düşüşten daha önce kaç kez gerçekten toparlandığını gösterir — bu, sinyalin o coin özelinde
+            ne kadar güvenilir olduğunun kanıtıdır.
+        </div>
+
+        <div class="metric-grid" style="grid-template-columns: repeat(3, 1fr); margin-bottom:20px;">
+            <div class="metric-box">
+                <div class="metric-label">Toplam Üretilen Sinyal</div>
+                <div class="metric-value">${Object.keys(dipSignals).length}</div>
+            </div>
+            <div class="metric-box">
+                <div class="metric-label">Genel İsabet Oranı</div>
+                <div class="metric-value" style="color:${dipHitRate == null ? 'var(--muted-dim)' : dipHitRate >= 50 ? 'var(--lime)' : 'var(--pink)'};">${dipHitRate != null ? dipHitRate.toFixed(0) + '%' : '-'}</div>
+                <div class="metric-note">${resolvedTotal} sonuçlanmış sinyalden ${confirmedTotal} tanesi tuttu</div>
+            </div>
+            <div class="metric-box">
+                <div class="metric-label">Şu An Bekleyen Aday</div>
+                <div class="metric-value">${watchingList.length}</div>
+            </div>
+        </div>
+
+        <div class="modal-section-title">🔮 Şu An İzlenen Dip Adayları</div>
+        <div class="card" style="margin-bottom:20px;">
+            <table>
+                <thead><tr><th>Coin</th><th>Düşüş</th><th>Dip Tarihi</th><th>Kaç Gün Önce</th><th>Geçmiş Performans</th></tr></thead>
+                <tbody>
+                    ${watchingList.length ? watchingList.map(s => {
+                        const daysAgo = Math.round((new Date(today) - new Date(s.dipDate)) / 86400000);
+                        return `
+                        <tr onclick="openCoinAnalysis('${s.symbol}')">
+                            <td data-label="Coin"><div class="sym">${s.symbol}</div></td>
+                            <td class="neg" data-label="Düşüş">-${s.declinePct.toFixed(1)}%</td>
+                            <td data-label="Dip Tarihi">${s.dipDate}</td>
+                            <td class="num" data-label="Kaç Gün Önce">${daysAgo} gün</td>
+                            <td data-label="Geçmiş Performans">${trackRecordBadge(s._priorSuccesses)}</td>
+                        </tr>
+                    `; }).join('') : '<tr><td colspan="5"><div class="empty-state"><span class="big-emoji">◎</span>Şu an izlenen bir dip adayı yok.</div></td></tr>'}
+                </tbody>
+            </table>
+        </div>
+
+        <div class="modal-section-title">✅ Geçmişte Toparlanmış Olanlar (Geçerlilik Kaydı)</div>
+        <div class="card">
+            <table>
+                <thead><tr><th>Coin</th><th>Düşüş</th><th>Dip Tarihi</th><th>Toparlanma Tarihi</th><th>Sıçrama</th></tr></thead>
+                <tbody>
+                    ${confirmedList.length ? confirmedList.map(s => `
+                        <tr onclick="openCoinAnalysis('${s.symbol}')">
+                            <td data-label="Coin"><div class="sym">${s.symbol}</div></td>
+                            <td class="neg" data-label="Düşüş">-${s.declinePct.toFixed(1)}%</td>
+                            <td data-label="Dip Tarihi">${s.dipDate}</td>
+                            <td data-label="Toparlanma Tarihi">${s.recoveryDate}</td>
+                            <td class="pos" data-label="Sıçrama">+${s.recoveryPct.toFixed(1)}%</td>
+                        </tr>
+                    `).join('') : '<tr><td colspan="5"><div class="empty-state">Henüz doğrulanmış bir dip-toparlanma yok.</div></td></tr>'}
+                </tbody>
+            </table>
+        </div>
+
+        <div class="modal-disclaimer">
+            Bu, ana "patlama" sisteminden tamamen ayrı, kendi verisini kendi ayarlarıyla (İleri Düzey
+            Ayarlar > "Dip Toparlanma ayarları") hesaplayan bağımsız bir sinyal türüdür. Aynı coin hem
+            burada hem büyük patlama listesinde görünebilir — ikisi farklı örüntüleri tarar. Yatırım
+            tavsiyesi değildir.
+        </div>
+    `;
 }
 
 // ================= COIN VERITABANI SAYFASI (tum taranan coinler, gun gun tam detay) =================
