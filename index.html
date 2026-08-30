@@ -7,31 +7,30 @@
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700;800&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@600;700;800&family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@500;600;700&display=swap');
 
     :root {
-        --bg: #0d0821;
-        --bg-elev: #160f36;
-        --card: #1b1240;
-        --border: #3a2a72;
-        --border-soft: #2a1d58;
-        --text: #f4f0ff;
-        --muted: #a99fd6;
-        --muted-dim: #6f63a8;
+        --bg: #000000;
+        --bg-elev: #141414;
+        --card: #1a1a1a;
+        --border: #4a4a4a;
+        --border-soft: #333333;
+        --text: #ffffff;
+        --muted: #cfcfcf;
+        --muted-dim: #9a9a9a;
 
-        /* Canli, doygun renk paleti - "radar ekrani" temasi */
-        --cyan: #00e5ff;
-        --cyan-dim: rgba(0,229,255,0.16);
-        --pink: #ff2d95;
-        --pink-dim: rgba(255,45,149,0.18);
-        --lime: #39ff88;
-        --lime-dim: rgba(57,255,136,0.16);
-        --amber: #ffc72c;
-        --amber-dim: rgba(255,199,44,0.18);
-        --violet: #b14aff;
-        --violet-dim: rgba(177,74,255,0.18);
+        /* Yuksek kontrastli, doygun "uyari tabelasi" paleti - gunes isiginda da okunsun diye */
+        --cyan: #00d9ff;
+        --cyan-dim: #003a45;
+        --pink: #ff3b3b;
+        --pink-dim: #4a0000;
+        --lime: #4dff4d;
+        --lime-dim: #0a3d0a;
+        --amber: #ffd400;
+        --amber-dim: #3d3000;
+        --violet: #c77dff;
+        --violet-dim: #2e1a45;
 
-        /* Eski isimler bazi yerlerde referans olarak kaliyor, canli tonlara esliyoruz */
         --teal: var(--lime);
         --teal-dim: var(--lime-dim);
         --coral: var(--pink);
@@ -40,27 +39,22 @@
     * { box-sizing: border-box; }
     body {
         margin: 0; font-family: 'Inter', -apple-system, sans-serif;
-        background:
-            radial-gradient(ellipse 1000px 600px at 10% -10%, rgba(255,45,149,0.16), transparent),
-            radial-gradient(ellipse 900px 700px at 100% 0%, rgba(0,229,255,0.14), transparent),
-            radial-gradient(ellipse 800px 500px at 50% 100%, rgba(177,74,255,0.12), transparent),
-            var(--bg);
-        background-attachment: fixed;
+        background: var(--bg);
         color: var(--text); padding: 0 0 60px 0;
         font-size: 15px;
     }
     .mono { font-family: 'IBM Plex Mono', monospace; }
     .wrap { max-width: 1080px; margin: 0 auto; padding: 0 20px; }
 
-    ::selection { background: var(--pink); color: #1a0a2e; }
+    ::selection { background: var(--amber); color: #000; }
     ::-webkit-scrollbar { width: 10px; height: 10px; }
     ::-webkit-scrollbar-track { background: var(--bg-elev); }
-    ::-webkit-scrollbar-thumb { background: linear-gradient(var(--cyan), var(--pink)); border-radius: 10px; }
+    ::-webkit-scrollbar-thumb { background: var(--amber); border-radius: 10px; }
 
     /* ---------- Header ---------- */
     header {
-        border-bottom: 1px solid var(--border-soft);
-        padding: 24px 0 20px 0; margin-bottom: 24px;
+        border-bottom: 2px solid var(--border);
+        padding: 22px 0 18px 0; margin-bottom: 24px;
     }
     .header-row {
         display: flex; align-items: center; justify-content: space-between;
@@ -68,77 +62,63 @@
     }
     .brand { display: flex; align-items: center; gap: 14px; }
 
-    /* Radar taramasi animasyonu - markanin imza ogesi */
     .brand-dot {
-        width: 34px; height: 34px; border-radius: 50%;
+        width: 32px; height: 32px; border-radius: 50%;
         position: relative; flex-shrink: 0;
-        background:
-            conic-gradient(from 0deg, transparent 0%, rgba(0,229,255,0.9) 8%, transparent 22%),
-            radial-gradient(circle, rgba(0,229,255,0.15) 0%, transparent 70%);
-        border: 2px solid var(--cyan);
-        box-shadow: 0 0 14px rgba(0,229,255,0.55), inset 0 0 8px rgba(0,229,255,0.3);
+        background: var(--bg-elev);
+        border: 3px solid var(--amber);
         animation: radar-spin 2.4s linear infinite;
     }
+    .brand-dot::before {
+        content: ""; position: absolute; top: 50%; left: 50%; width: 50%; height: 2px;
+        background: var(--amber); transform-origin: 0 50%;
+    }
     .brand-dot::after {
-        content: ""; position: absolute; inset: 8px; border-radius: 50%;
-        background: var(--pink); box-shadow: 0 0 10px var(--pink);
+        content: ""; position: absolute; inset: 9px; border-radius: 50%;
+        background: var(--pink);
         animation: radar-blip 2.4s ease-in-out infinite;
     }
     @keyframes radar-spin { to { transform: rotate(360deg); } }
-    @keyframes radar-blip { 0%,100% { opacity: 0.3; transform: scale(0.7); } 50% { opacity: 1; transform: scale(1); } }
+    @keyframes radar-blip { 0%,100% { opacity: 0.4; } 50% { opacity: 1; } }
     @keyframes pulse-dot {
-        0% { box-shadow: 0 0 0 0 rgba(255,45,149,0.6); }
-        70% { box-shadow: 0 0 0 10px rgba(255,45,149,0); }
-        100% { box-shadow: 0 0 0 0 rgba(255,45,149,0); }
+        0% { box-shadow: 0 0 0 0 rgba(255,59,59,0.7); }
+        70% { box-shadow: 0 0 0 8px rgba(255,59,59,0); }
+        100% { box-shadow: 0 0 0 0 rgba(255,59,59,0); }
     }
 
     .brand-text h1 {
         font-family: 'Space Grotesk', 'Inter', sans-serif;
         font-size: 22px; font-weight: 800; margin: 0; letter-spacing: -0.01em;
-        background: linear-gradient(90deg, var(--cyan), var(--pink) 60%, var(--amber));
-        -webkit-background-clip: text; background-clip: text; color: transparent;
-        background-size: 200% auto;
-        animation: hue-drift 6s ease-in-out infinite alternate;
+        color: var(--amber);
     }
-    @keyframes hue-drift { 0% { background-position: 0% 50%; } 100% { background-position: 100% 50%; } }
-    .brand-text .tag { font-size: 12.5px; color: var(--muted); margin-top: 3px; }
+    .brand-text .tag { font-size: 12.5px; color: var(--muted); margin-top: 3px; font-weight: 500; }
 
     #scan-btn {
-        background: linear-gradient(135deg, var(--cyan), var(--violet) 55%, var(--pink));
-        background-size: 200% 200%;
-        color: #0d0821; border: none;
-        padding: 12px 22px; border-radius: 12px; font-size: 14px; font-weight: 800;
+        background: var(--amber);
+        color: #000; border: 2px solid var(--amber);
+        padding: 12px 22px; border-radius: 10px; font-size: 14px; font-weight: 800;
         cursor: pointer; display: flex; align-items: center; gap: 8px;
-        transition: transform 0.15s ease, box-shadow 0.15s ease, background-position 0.3s ease;
-        box-shadow: 0 4px 18px rgba(177,74,255,0.35);
+        transition: transform 0.12s ease, background 0.12s ease;
     }
-    #scan-btn:hover:not(:disabled) {
-        transform: translateY(-2px) scale(1.02);
-        box-shadow: 0 8px 26px rgba(0,229,255,0.45);
-        background-position: 100% 0%;
-    }
+    #scan-btn:hover:not(:disabled) { background: #fff; border-color: #fff; transform: translateY(-2px); }
     #scan-btn:active:not(:disabled) { transform: translateY(0) scale(0.98); }
     #scan-btn:disabled { opacity: 0.5; cursor: default; }
 
     .icon-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
     .icon-btn {
-        background: var(--bg-elev); border: 1px solid var(--border); color: var(--muted);
-        padding: 10px 14px; border-radius: 10px; font-size: 13px; cursor: pointer; font-weight: 600;
-        transition: border-color 0.15s ease, color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
+        background: var(--bg-elev); border: 2px solid var(--border); color: var(--text);
+        padding: 10px 14px; border-radius: 10px; font-size: 13px; cursor: pointer; font-weight: 700;
+        transition: border-color 0.12s ease, transform 0.12s ease;
     }
-    .icon-btn:hover {
-        border-color: var(--cyan); color: var(--text);
-        transform: translateY(-1px);
-        box-shadow: 0 4px 14px rgba(0,229,255,0.25);
-    }
+    .icon-btn:hover { border-color: var(--amber); transform: translateY(-1px); }
     .icon-btn:active { transform: translateY(0) scale(0.97); }
 
     #status-msg {
-        display: block; margin-top: 12px; font-size: 13px; color: var(--muted);
+        display: block; margin-top: 12px; font-size: 13px; color: var(--muted); font-weight: 600;
         min-height: 18px;
     }
-    #status-msg.error { color: var(--pink); font-weight: 600; }
-    #status-msg.ok { color: var(--lime); font-weight: 600; }
+    #status-msg.error { color: var(--pink); font-weight: 800; }
+    #status-msg.ok { color: var(--lime); font-weight: 800; }
 
     /* ---------- Section headers ---------- */
     .section { margin-bottom: 28px; }
@@ -148,99 +128,92 @@
     }
     .section-head h2 {
         font-family: 'Space Grotesk', sans-serif;
-        font-size: 16.5px; font-weight: 700; margin: 0;
+        font-size: 16.5px; font-weight: 700; margin: 0; color: var(--text);
         display: flex; align-items: center; gap: 8px;
     }
     .section-head .count-chip {
-        font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; font-weight: 700; color: var(--bg);
-        background: linear-gradient(90deg, var(--cyan), var(--lime));
+        font-family: 'IBM Plex Mono', monospace; font-size: 12px; font-weight: 800; color: #000;
+        background: var(--amber);
         padding: 3px 10px; border-radius: 999px;
     }
     .section-desc { color: var(--muted); font-size: 13px; margin: 6px 0 14px 0; line-height: 1.55; max-width: 720px; }
 
     /* ---------- Card / Table ---------- */
     .card {
-        background: var(--card); border: 1px solid var(--border-soft); border-radius: 16px;
+        background: var(--card); border: 2px solid var(--border-soft); border-radius: 14px;
         overflow: hidden; position: relative;
-        box-shadow: 0 8px 30px rgba(0,0,0,0.35);
     }
-    /* Her ana bolume kendi renk kimligini veren ust seritler */
     .section:nth-of-type(1) .card::before,
     .section:nth-of-type(2) .card::before,
     .section:nth-of-type(3) .card::before {
-        content: ""; position: absolute; top: 0; left: 0; right: 0; height: 3px;
+        content: ""; position: absolute; top: 0; left: 0; right: 0; height: 4px;
     }
-    .section:nth-of-type(1) .card::before { background: linear-gradient(90deg, var(--pink), var(--violet)); }
-    .section:nth-of-type(2) .card::before { background: linear-gradient(90deg, var(--cyan), var(--lime)); }
-    .section:nth-of-type(3) .card::before { background: linear-gradient(90deg, var(--lime), var(--amber)); }
+    .section:nth-of-type(1) .card::before { background: var(--pink); }
+    .section:nth-of-type(2) .card::before { background: var(--cyan); }
+    .section:nth-of-type(3) .card::before { background: var(--lime); }
 
     table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
     thead th {
-        text-align: left; color: var(--muted); font-weight: 700; font-size: 11.5px;
+        text-align: left; color: var(--text); font-weight: 800; font-size: 11.5px;
         text-transform: uppercase; letter-spacing: 0.05em;
-        padding: 13px 14px; border-bottom: 1px solid var(--border-soft);
+        padding: 13px 14px; border-bottom: 2px solid var(--border);
         white-space: nowrap; background: var(--bg-elev);
     }
     tbody td {
         padding: 13px 14px; border-bottom: 1px solid var(--border-soft); white-space: nowrap;
+        color: var(--text);
     }
     tbody tr:last-child td { border-bottom: none; }
-    tbody tr { cursor: pointer; transition: background 0.15s ease, transform 0.1s ease; position: relative; }
-    tbody tr:hover td {
-        background: linear-gradient(90deg, rgba(0,229,255,0.08), rgba(255,45,149,0.06));
-    }
-    tbody tr:hover { transform: scale(1.002); }
+    tbody tr { cursor: pointer; transition: background 0.12s ease; }
+    tbody tr:hover td { background: #2a2a2a; }
 
-    .sym { font-weight: 800; font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: var(--text); }
-    .sub-cell { color: var(--muted-dim); font-size: 11.5px; margin-top: 2px; }
-    .pos { color: var(--lime); font-weight: 700; font-family: 'IBM Plex Mono', monospace; text-shadow: 0 0 12px rgba(57,255,136,0.4); }
-    .neg { color: var(--pink); font-weight: 700; font-family: 'IBM Plex Mono', monospace; text-shadow: 0 0 12px rgba(255,45,149,0.35); }
-    .num { font-family: 'IBM Plex Mono', monospace; }
+    .sym { font-weight: 800; font-family: 'IBM Plex Mono', monospace; font-size: 13.5px; color: var(--text); }
+    .sub-cell { color: var(--muted); font-size: 11.5px; margin-top: 2px; font-weight: 600; }
+    .pos { color: var(--lime); font-weight: 800; font-family: 'IBM Plex Mono', monospace; }
+    .neg { color: var(--pink); font-weight: 800; font-family: 'IBM Plex Mono', monospace; }
+    .num { font-family: 'IBM Plex Mono', monospace; color: var(--text); }
 
     .status-chip {
         display: inline-flex; align-items: center; gap: 6px;
-        padding: 6px 12px; border-radius: 999px; font-size: 11.5px; font-weight: 800;
+        padding: 6px 12px; border-radius: 6px; font-size: 11.5px; font-weight: 800;
         white-space: nowrap;
     }
-    .status-chip .dot { width: 7px; height: 7px; border-radius: 50%; }
-    .chip-hot { background: linear-gradient(90deg, var(--pink-dim), rgba(255,45,149,0.28)); color: #ff8fc4; border: 1px solid rgba(255,45,149,0.4); }
-    .chip-hot .dot { background: var(--pink); box-shadow: 0 0 8px var(--pink); animation: pulse-dot 1.4s infinite; }
-    .chip-warm { background: linear-gradient(90deg, var(--amber-dim), rgba(255,199,44,0.28)); color: #ffd966; border: 1px solid rgba(255,199,44,0.4); }
-    .chip-warm .dot { background: var(--amber); box-shadow: 0 0 8px var(--amber); }
-    .chip-mild { background: linear-gradient(90deg, var(--violet-dim), rgba(177,74,255,0.28)); color: #d8aaff; border: 1px solid rgba(177,74,255,0.4); }
-    .chip-mild .dot { background: var(--violet); box-shadow: 0 0 8px var(--violet); }
-    .chip-confirmed { background: linear-gradient(90deg, var(--lime-dim), rgba(57,255,136,0.28)); color: #8dffb8; border: 1px solid rgba(57,255,136,0.4); }
-    .chip-confirmed .dot { background: var(--lime); box-shadow: 0 0 8px var(--lime); }
+    .status-chip .dot { width: 7px; height: 7px; border-radius: 50%; background: #000; }
+    /* Uyari tabelasi mantigi: DUZ, koyu renkli yazi + parlak zemin = max kontrast */
+    .chip-hot { background: var(--pink); color: #fff; }
+    .chip-hot .dot { background: #fff; animation: pulse-dot 1.3s infinite; }
+    .chip-warm { background: var(--amber); color: #000; }
+    .chip-warm .dot { background: #000; }
+    .chip-mild { background: var(--violet); color: #fff; }
+    .chip-mild .dot { background: #fff; }
+    .chip-confirmed { background: var(--lime); color: #000; }
+    .chip-confirmed .dot { background: #000; }
 
     .empty-state {
         text-align: center; padding: 48px 20px; color: var(--muted);
-        font-size: 13.5px; line-height: 1.6;
+        font-size: 13.5px; line-height: 1.6; font-weight: 500;
     }
-    .empty-state .big-emoji { font-size: 34px; display: block; margin-bottom: 10px; opacity: 0.85;
-        filter: drop-shadow(0 0 10px rgba(0,229,255,0.4)); }
+    .empty-state .big-emoji { font-size: 34px; display: block; margin-bottom: 10px; }
 
     details.advanced { margin-top: 22px; }
     details.advanced summary {
-        cursor: pointer; color: var(--muted); font-size: 12.5px; padding: 8px 0;
-        list-style: none; font-weight: 600;
+        cursor: pointer; color: var(--text); font-size: 12.5px; padding: 8px 0;
+        list-style: none; font-weight: 700;
     }
-    details.advanced summary:hover { color: var(--cyan); }
+    details.advanced summary:hover { color: var(--amber); }
     details.advanced summary::-webkit-details-marker { display: none; }
     .settings-grid {
         display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-        gap: 12px; margin-top: 10px; background: var(--card); border: 1px solid var(--border-soft);
+        gap: 12px; margin-top: 10px; background: var(--card); border: 2px solid var(--border-soft);
         border-radius: 14px; padding: 18px;
     }
-    .settings-grid label { display: flex; flex-direction: column; gap: 6px; font-size: 11.5px; color: var(--muted); }
+    .settings-grid label { display: flex; flex-direction: column; gap: 6px; font-size: 11.5px; color: var(--muted); font-weight: 600; }
     .settings-grid input[type="number"] {
-        background: var(--bg-elev); border: 1px solid var(--border); color: var(--text);
-        padding: 9px 10px; border-radius: 9px; font-family: 'IBM Plex Mono', monospace; font-size: 13px;
-        transition: border-color 0.15s ease, box-shadow 0.15s ease;
+        background: var(--bg-elev); border: 2px solid var(--border); color: var(--text);
+        padding: 9px 10px; border-radius: 8px; font-family: 'IBM Plex Mono', monospace; font-size: 13px; font-weight: 700;
     }
-    .settings-grid input[type="number"]:focus {
-        outline: none; border-color: var(--cyan); box-shadow: 0 0 0 3px rgba(0,229,255,0.2);
-    }
-    .settings-grid input[type="checkbox"] { accent-color: var(--pink); width: 16px; height: 16px; }
+    .settings-grid input[type="number"]:focus { outline: none; border-color: var(--amber); }
+    .settings-grid input[type="checkbox"] { accent-color: var(--amber); width: 18px; height: 18px; }
 
     footer.disclaimer {
         font-size: 12px; color: var(--muted-dim); text-align: center;
@@ -248,58 +221,52 @@
         border-top: 1px solid var(--border-soft);
     }
 
-    /* Tiklanabilir satirlar */
     #signals-body tr, #confirmed-body tr, #top30-body tr { cursor: pointer; }
     .click-hint { font-size: 11px; color: var(--muted); text-align: center; margin-top: 8px; }
 
     /* ---------- Modal ---------- */
     .modal-overlay {
-        display: none; position: fixed; inset: 0; background: rgba(8,4,20,0.8);
-        backdrop-filter: blur(3px);
+        display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.9);
         z-index: 1000; align-items: flex-start; justify-content: center;
-        overflow-y: auto; padding: 40px 16px;
+        overflow-y: auto; padding: 24px 16px;
     }
     .modal-overlay.open { display: flex; }
     .modal-box {
-        background: var(--card); border: 1px solid var(--border); border-radius: 18px;
+        background: var(--card); border: 2px solid var(--border); border-radius: 16px;
         max-width: 640px; width: 100%; padding: 26px; position: relative;
-        box-shadow: 0 20px 70px rgba(0,0,0,0.6), 0 0 0 1px rgba(0,229,255,0.08);
     }
     .modal-close {
-        position: absolute; top: 16px; right: 16px; background: var(--bg-elev); border: 1px solid var(--border);
-        color: var(--muted); font-size: 18px; cursor: pointer; line-height: 1;
-        width: 32px; height: 32px; border-radius: 9px; display: flex; align-items: center; justify-content: center;
-        transition: all 0.15s ease;
+        position: absolute; top: 16px; right: 16px; background: var(--bg-elev); border: 2px solid var(--border);
+        color: var(--text); font-size: 18px; cursor: pointer; line-height: 1;
+        width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center;
+        font-weight: 800;
     }
-    .modal-close:hover { color: var(--pink); border-color: var(--pink); transform: rotate(90deg); }
-    .modal-title { font-family: 'Space Grotesk', sans-serif; font-size: 22px; font-weight: 800; margin-bottom: 4px; }
-    .modal-subtitle { color: var(--muted); font-size: 13px; margin-bottom: 18px; }
-    .modal-loading { text-align: center; padding: 50px 10px; color: var(--muted); font-size: 13.5px; }
+    .modal-close:hover { color: #000; background: var(--pink); border-color: var(--pink); }
+    .modal-title { font-family: 'Space Grotesk', sans-serif; font-size: 22px; font-weight: 800; margin-bottom: 4px; color: var(--text); }
+    .modal-subtitle { color: var(--muted); font-size: 13px; margin-bottom: 18px; font-weight: 500; }
+    .modal-loading { text-align: center; padding: 50px 10px; color: var(--muted); font-size: 13.5px; font-weight: 600; }
 
-    .verdict-box { border-radius: 14px; padding: 18px; margin-bottom: 20px; font-size: 13.5px; line-height: 1.6; }
-    .verdict-bullish { background: var(--lime-dim); border: 1px solid rgba(57,255,136,0.4); box-shadow: 0 0 24px rgba(57,255,136,0.08); }
-    .verdict-bearish { background: var(--pink-dim); border: 1px solid rgba(255,45,149,0.4); box-shadow: 0 0 24px rgba(255,45,149,0.08); }
-    .verdict-neutral { background: var(--amber-dim); border: 1px solid rgba(255,199,44,0.4); box-shadow: 0 0 24px rgba(255,199,44,0.08); }
-    .verdict-title { font-weight: 800; font-size: 14.5px; margin-bottom: 6px; }
+    .verdict-box { border-radius: 12px; padding: 18px; margin-bottom: 20px; font-size: 13.5px; line-height: 1.6; border: 2px solid; }
+    .verdict-bullish { background: var(--lime-dim); border-color: var(--lime); color: #fff; }
+    .verdict-bearish { background: var(--pink-dim); border-color: var(--pink); color: #fff; }
+    .verdict-neutral { background: var(--amber-dim); border-color: var(--amber); color: #fff; }
+    .verdict-title { font-weight: 800; font-size: 14.5px; margin-bottom: 6px; color: #fff; }
 
     .metric-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 18px; }
-    .metric-box {
-        background: var(--bg-elev); border: 1px solid var(--border-soft); border-radius: 12px; padding: 13px;
-        transition: border-color 0.15s ease, transform 0.15s ease;
-    }
-    .metric-box:hover { border-color: var(--cyan); transform: translateY(-1px); }
-    .metric-label { font-size: 11.5px; color: var(--muted); margin-bottom: 4px; }
-    .metric-value { font-size: 18px; font-weight: 800; font-family: 'IBM Plex Mono', monospace; }
-    .metric-note { font-size: 11.5px; color: var(--muted); margin-top: 4px; line-height: 1.4; }
+    .metric-box { background: var(--bg-elev); border: 2px solid var(--border-soft); border-radius: 10px; padding: 13px; }
+    .metric-box:hover { border-color: var(--amber); }
+    .metric-label { font-size: 11.5px; color: var(--muted); margin-bottom: 4px; font-weight: 600; }
+    .metric-value { font-size: 18px; font-weight: 800; font-family: 'IBM Plex Mono', monospace; color: var(--text); }
+    .metric-note { font-size: 11.5px; color: var(--muted); margin-top: 4px; line-height: 1.4; font-weight: 500; }
 
-    .modal-section-title { font-family: 'Space Grotesk', sans-serif; font-size: 13.5px; font-weight: 700; margin: 18px 0 8px 0; color: var(--text); }
+    .modal-section-title { font-family: 'Space Grotesk', sans-serif; font-size: 13.5px; font-weight: 800; margin: 18px 0 8px 0; color: var(--amber); }
     .modal-disclaimer {
         font-size: 11px; color: var(--muted-dim); margin-top: 16px; padding-top: 12px;
         border-top: 1px solid var(--border-soft); line-height: 1.5;
     }
 
     @media (max-width: 640px) {
-        body { font-size: 14px; }
+        body { font-size: 14.5px; }
         .wrap { padding: 0 12px; }
         header { padding: 18px 0 14px 0; }
         .header-row { flex-direction: column; align-items: stretch; }
@@ -313,7 +280,6 @@
         .section-head h2 { font-size: 14.5px; }
         .section-desc { font-size: 12px; }
 
-        /* Tablolari mobilde kart gorunumune cevir */
         .card table, .card thead, .card tbody, .card tr, .card th, .card td {
             display: block;
         }
@@ -323,11 +289,11 @@
         }
         .card tbody tr:last-child { border-bottom: none; }
         .card tbody td {
-            border: none; padding: 5px 0; white-space: normal;
+            border: none; padding: 6px 0; white-space: normal;
             display: flex; align-items: center; justify-content: space-between; gap: 10px;
         }
         .card tbody td::before {
-            content: attr(data-label); color: var(--muted); font-size: 11px;
+            content: attr(data-label); color: var(--muted); font-size: 11.5px; font-weight: 700;
             text-transform: uppercase; letter-spacing: 0.03em; flex-shrink: 0;
         }
         .card tbody td:empty, .card tbody td[data-label=""] { display: none; }
@@ -368,6 +334,13 @@
             </div>
         </div>
         <span id="status-msg">Hazır — taramayı başlatmak için yukarıdaki butona bas.</span>
+        <div style="display:flex; align-items:center; gap:8px; margin-top:10px; flex-wrap:wrap;">
+            <label style="display:flex; align-items:center; gap:7px; font-size:12.5px; color:var(--muted); font-weight:600; cursor:pointer;">
+                <input type="checkbox" id="autoscan-toggle" onchange="onAutoScanToggle()" style="width:16px; height:16px; accent-color: var(--amber);">
+                🔄 Otomatik tara (sayfa açıkken, 15 dakikada bir)
+            </label>
+            <span id="autoscan-status" style="font-size:11.5px; color:var(--muted-dim);"></span>
+        </div>
     </header>
 
     <div class="section">
@@ -488,7 +461,7 @@
 
 <!-- Coin Veritabani Sayfasi (tam listeli, gun gun detay) -->
 <div class="modal-overlay" id="database-overlay" onclick="if(event.target===this) closeDatabasePage()">
-    <div class="modal-box" style="max-width: 900px;">
+    <div class="modal-box" style="max-width: 1200px; width: 95vw;">
         <button class="modal-close" onclick="closeDatabasePage()">×</button>
         <div id="database-content"></div>
     </div>
@@ -1757,12 +1730,23 @@ async function renderDatabaseList() {
         const lastClosePrice = daily[daily.length - 1].close;
         const isActive = !!watchlist[symbol];
 
-        // Bu coin icin en son / en onemli sinyal durumu
+        // Bu coin icin sinyal dokumu - kac tanesi aktif izlemede, kac tanesi gecmiste dogrulanmis, kac tanesi bosa cikmis
         const symbolSignals = Object.values(signals).filter(s => s.symbol === symbol);
-        let bestStatus = "—";
-        if (symbolSignals.some(s => s.status === "WATCHING")) bestStatus = "🟡 İZLENİYOR";
-        else if (symbolSignals.some(s => s.status === "CONFIRMED")) bestStatus = "🟢 DOĞRULANDI";
-        else if (symbolSignals.length) bestStatus = "⚪ Geçmiş (bitmiş)";
+        const watchingCount = symbolSignals.filter(s => s.status === "WATCHING").length;
+        const confirmedCount = symbolSignals.filter(s => s.status === "CONFIRMED").length;
+        const expiredCount = symbolSignals.filter(s => s.status === "EXPIRED").length;
+
+        let bestStatus;
+        if (watchingCount > 0) {
+            bestStatus = `🟡 İZLENİYOR (${watchingCount} aktif)`;
+            if (confirmedCount > 0) bestStatus += ` · ${confirmedCount} geçmiş doğrulama`;
+        } else if (confirmedCount > 0) {
+            bestStatus = `🟢 DOĞRULANDI (${confirmedCount}x geçmişte tuttu)`;
+        } else if (expiredCount > 0) {
+            bestStatus = `⚪ Geçmiş (${expiredCount}x denendi, tutmadı)`;
+        } else {
+            bestStatus = "—";
+        }
 
         const oiDates = oiHistory[symbol] ? Object.keys(oiHistory[symbol]) : [];
 
@@ -1773,7 +1757,7 @@ async function renderDatabaseList() {
 
     content.innerHTML = `
         <div class="modal-title">📚 Coin Veritabanı</div>
-        <div class="modal-subtitle">Şimdiye kadar takip edilen tüm coinler — bir satıra tıklayınca gün gün tam detay açılır (fiyat, hacim, OI, hangi gün ne oldu).</div>
+        <div class="modal-subtitle">Şimdiye kadar takip edilen tüm coinler — bir satıra tıklayınca gün gün tam detay açılır (fiyat, hacim, OI, hangi gün ne oldu). "İZLENİYOR" şu an aktif bekleyen bir sinyali olduğu, "DOĞRULANDI" ise geçmişte en az bir kez kalıbın tuttuğu anlamına gelir — aktif fırsat için ana sayfadaki "Yakında Tekrar Patlayabilecek Coinler" listesine bak.</div>
         <div class="card" style="margin-top:14px;">
             <table>
                 <thead><tr><th>Coin</th><th>Kaç Gün Veri Var</th><th>Son Görülme</th><th>Son Fiyat</th><th>Durum</th><th>Aktif mi</th></tr></thead>
@@ -1846,7 +1830,7 @@ async function renderCoinDetail(symbol) {
         <div class="modal-subtitle">
             Güncel fiyat: $${currentPrice} &nbsp;·&nbsp; ATR(14): ${atrPct != null ? atrPct.toFixed(2) + '%' : 'veri yok'} &nbsp;·&nbsp; ${daily.length} günlük kayıt
         </div>
-        <div class="card" style="margin-top:10px; max-height:520px; overflow-y:auto;">
+        <div class="card" style="margin-top:10px; max-height:70vh; overflow-y:auto;">
             <table>
                 <thead>
                     <tr><th>Tarih</th><th>Günlük Değişim</th><th>Yüksek</th><th>Düşük</th><th>Kapanış</th><th>Hacim</th><th>Açık Pozisyon (OI)</th><th>O Gün Ne Oldu</th></tr>
@@ -1920,6 +1904,80 @@ renderSignals();
         el.style.color = "var(--amber)";
     }
 })();
+
+// ================= OTOMATIK TARAMA (sayfa acikken, telefon/laptop ayni sekilde calisir) =================
+// NOT: Telefon ekrani kilitlenir ya da baska bir uygulamaya gecilirse, isletim sistemi
+// (iOS/Android) arka plandaki sekmeyi "uyutur" - bu tarayicinin/bizim kodun degil, telefonun
+// pil tasarrufu kuralidir. Bunu telafi etmek icin, sekme tekrar goruntulendiginde
+// "aradan yeterince zaman gecmis mi" kontrolu yapip gerekirse hemen bir tarama tetikleriz.
+const AUTO_SCAN_INTERVAL_MS = 15 * 60 * 1000; // 15 dakika
+let autoScanTimer = null;
+
+function triggerScanIfIdle() {
+    const btn = document.getElementById("scan-btn");
+    if (btn && !btn.disabled) runScan();
+}
+
+function startAutoScan() {
+    stopAutoScan();
+    autoScanTimer = setInterval(() => {
+        localStorage.setItem("pumpwatch_last_autoscan", String(Date.now()));
+        triggerScanIfIdle();
+    }, AUTO_SCAN_INTERVAL_MS);
+    localStorage.setItem("pumpwatch_autoscan_enabled", "true");
+    updateAutoScanStatusText();
+}
+
+function stopAutoScan() {
+    if (autoScanTimer) clearInterval(autoScanTimer);
+    autoScanTimer = null;
+    localStorage.setItem("pumpwatch_autoscan_enabled", "false");
+    updateAutoScanStatusText();
+}
+
+function onAutoScanToggle() {
+    const checked = document.getElementById("autoscan-toggle").checked;
+    if (checked) {
+        startAutoScan();
+        localStorage.setItem("pumpwatch_last_autoscan", String(Date.now()));
+        triggerScanIfIdle(); // acar acmaz bir kere tara
+    } else {
+        stopAutoScan();
+    }
+}
+
+function updateAutoScanStatusText() {
+    const el = document.getElementById("autoscan-status");
+    if (!el) return;
+    const enabled = localStorage.getItem("pumpwatch_autoscan_enabled") === "true";
+    if (!enabled) { el.textContent = ""; return; }
+    const last = parseInt(localStorage.getItem("pumpwatch_last_autoscan") || "0", 10);
+    if (!last) { el.textContent = "Açık"; return; }
+    const mins = Math.round((Date.now() - last) / 60000);
+    el.textContent = `Açık — son tarama ${mins} dk önce`;
+}
+
+// Sekme tekrar goruntulenince (telefon kilitliyken/arka plandayken atlanmis olabilecek
+// taramayi yakalamak icin) yeterli sure gectiyse hemen tara.
+document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState !== "visible") return;
+    if (localStorage.getItem("pumpwatch_autoscan_enabled") !== "true") return;
+    const last = parseInt(localStorage.getItem("pumpwatch_last_autoscan") || "0", 10);
+    if (Date.now() - last >= AUTO_SCAN_INTERVAL_MS) {
+        localStorage.setItem("pumpwatch_last_autoscan", String(Date.now()));
+        triggerScanIfIdle();
+    }
+});
+
+// Sayfa yuklenirken onceki tercihi hatirla (bu cihaza ozel bir ayar, localStorage'da tutulur)
+(function restoreAutoScanPreference() {
+    if (localStorage.getItem("pumpwatch_autoscan_enabled") === "true") {
+        document.getElementById("autoscan-toggle").checked = true;
+        startAutoScan();
+    }
+    setInterval(updateAutoScanStatusText, 30000); // durum yazisini her 30 saniyede tazele
+})();
+
 </script>
 
 </body>
