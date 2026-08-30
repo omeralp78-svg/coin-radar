@@ -521,6 +521,7 @@
 const API_BASE = "https://fapi.binance.com";
 const TOP_N = 30;
 const WATCHLIST_RETENTION_DAYS = 14;
+const MAX_WATCHLIST_SIZE = 60; // guvenlik sinir - watchlist bunun uzerine cikmasin (taramanin donmasini onlemek icin)
 const HOURLY_FETCH_LIMIT = 500; // ~20 gunluk saatlik veri (pattern penceresi + ATR icin yeterli tampon)
 
 // ---------- Firebase / Firestore baglantisi ----------
@@ -770,7 +771,14 @@ function detectSignalsForSymbol(symbol, rows, btcMap, cfg, previousSignals) {
     const windowH = cfg.PUMP_WINDOW_HOURS;
 
     let i = windowH;
+    let safetyCounter = 0;
+    const maxIterations = n * 2 + 100; // guvenlik kemeri - normalde asla bu kadar dongu olmaz
     while (i < n) {
+        safetyCounter++;
+        if (safetyCounter > maxIterations) {
+            console.error(`detectSignalsForSymbol: ${symbol} icin guvenlik siniri asildi, dongu durduruldu (olasi sonsuz dongu engellendi).`);
+            break;
+        }
         const base = rows[i - windowH].close;
         const changePct = base === 0 ? 0 : ((rows[i].high - base) / base) * 100;
 
@@ -877,6 +885,15 @@ async function runScan() {
             const daysSince = (new Date(today) - new Date(watchlist[sym].lastSeen)) / 86400000;
             if (daysSince > WATCHLIST_RETENTION_DAYS) delete watchlist[sym];
         }
+        // GUVENLIK SINIRI: watchlist zamanla siniz kalmadan buyuyebilirdi (her gun +30 ekleniyor,
+        // sadece 14 gundur hic gorulmeyenler siliniyordu). Bu da taramayi gitgide agirlastirip
+        // taraycinin donmus gibi hissettirmesine yol acabilirdi. Simdi en fazla MAX_WATCHLIST_SIZE
+        // kadar - en son gorulenler oncelikli olacak sekilde - tutuyoruz.
+        const watchlistEntries = Object.entries(watchlist).sort((a, b) => b[1].lastSeen.localeCompare(a[1].lastSeen));
+        if (watchlistEntries.length > MAX_WATCHLIST_SIZE) {
+            const toRemove = watchlistEntries.slice(MAX_WATCHLIST_SIZE);
+            for (const [sym] of toRemove) delete watchlist[sym];
+        }
         await store.set(KEYS.watchlist, watchlist);
 
         await renderTop30();
@@ -915,7 +932,9 @@ async function runScan() {
 
             done++;
             setStatus(`⏳ Coin geçmişleri inceleniyor... (${done}/${symbols.length})`);
-            await sleep(120);
+            // Tarayicinin "nefes almasi" icin ekstra bekleme - uzun taramalarda arayuzun
+            // donmus gibi hissettirmesini engeller (her 5 coin'de bir biraz daha uzun mola).
+            await sleep(done % 5 === 0 ? 300 : 120);
         }
         await store.set(KEYS.oiHistory, oiHistory);
 
@@ -1005,7 +1024,14 @@ function detectDipSignalsForSymbol(symbol, dailyRows, cfg, previousDipSignals) {
     if (n < cfg.DIP_LOOKBACK_DAYS + 2) return signals;
 
     let i = cfg.DIP_LOOKBACK_DAYS;
+    let safetyCounter = 0;
+    const maxIterations = n * 2 + 100; // guvenlik kemeri - normalde asla bu kadar dongu olmaz
     while (i < n) {
+        safetyCounter++;
+        if (safetyCounter > maxIterations) {
+            console.error(`detectDipSignalsForSymbol: ${symbol} icin guvenlik siniri asildi, dongu durduruldu (olasi sonsuz dongu engellendi).`);
+            break;
+        }
         const windowStart = Math.max(0, i - cfg.DIP_LOOKBACK_DAYS);
         const startPrice = dailyRows[windowStart].close;
 
@@ -1037,7 +1063,12 @@ function detectDipSignalsForSymbol(symbol, dailyRows, cfg, previousDipSignals) {
             status, recoveryDate: recoveryIdx !== null ? dailyRows[recoveryIdx].date : null, recoveryPct
         };
 
-        i = (recoveryIdx !== null ? recoveryIdx : dipIdx) + 1;
+        // ONEMLI HATA DUZELTMESI: dipIdx, mevcut i'den GERIDE bir noktada bulunabilir
+        // (windowStart = i - DIP_LOOKBACK_DAYS oldugu icin). Eger recovery bulunamazsa ve
+        // sadece "dipIdx + 1" kullanilsaydi, i bazen ILERLEMEZ ya da GERI GIDER - bu da
+        // ayni pencerenin sonsuza kadar tekrar taranmasina (tarayicinin kilitlenmesine) sebep olurdu.
+        // Math.max ile i'nin HER ZAMAN en az 1 ilerlemesini garanti ediyoruz.
+        i = Math.max(i + 1, (recoveryIdx !== null ? recoveryIdx : dipIdx) + 1);
     }
     return signals;
 }
