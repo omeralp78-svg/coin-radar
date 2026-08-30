@@ -356,6 +356,7 @@
                 </div>
             </div>
             <div class="icon-actions">
+                <button class="icon-btn" onclick="exportAllData(this)">⬇ Dışa Aktar</button>
                 <button class="icon-btn" id="dip-nav-btn" onclick="openDipPage()" style="position:relative;">📉 Dip Toparlanma<span id="dip-badge" class="nav-badge" style="display:none;"></span></button>
                 <button class="icon-btn" onclick="openDatabasePage()">📚 Coin Veritabanı</button>
                 <button class="icon-btn" onclick="openOptimizerPanel()">🔬 Eşik Optimizasyonu</button>
@@ -1203,6 +1204,62 @@ async function renderSignals() {
                 <td data-label="Yeni Artış"><span class="status-chip chip-confirmed"><span class="dot"></span>+${r.reentryPct.toFixed(1)}%</span></td>
             </tr>
         `).join('');
+    }
+}
+
+// ================= DISA AKTARMA (Claude ile analiz icin tek JSON dosyasi) =================
+
+async function exportAllData(btn) {
+    const originalText = btn ? btn.textContent : "";
+    if (btn) { btn.textContent = "⏳ Hazırlanıyor..."; btn.disabled = true; }
+
+    try {
+        const [snapshots, watchlist, signals, dipSignals, config, oiHistory, btcKlines, klines] = await Promise.all([
+            store.get(KEYS.snapshots, {}),
+            store.get(KEYS.watchlist, {}),
+            store.get(KEYS.signals, {}),
+            store.get(KEYS.dipSignals, {}),
+            store.get(KEYS.config, {}),
+            store.get(KEYS.oiHistory, {}),
+            store.get(KEYS.btcKlines, {}),
+            getAllKlines()
+        ]);
+
+        // Backtest istatistiklerini de hazir hesaplanmis olarak ekle - analiz kolaylassin diye
+        const backtestStats = computeBacktestCore(signals, klines);
+
+        const exportData = {
+            exportedAt: new Date().toISOString(),
+            aciklama: "Coin Radar - tam veritabani disa aktarimi. Bu dosyayi Claude'a yukleyip analiz ettirebilirsin.",
+            ayarlar: config,
+            gunlukTop30Gecmisi: snapshots,
+            watchlist: watchlist,
+            anaPatlamaSinyalleri: signals,
+            dipToparlanmaSinyalleri: dipSignals,
+            gunlukAcikPozisyonGecmisi: oiHistory,
+            btcReferansSerisi: btcKlines,
+            coinSaatlikFiyatGecmisi: klines,
+            hazirBacktestIstatistikleri: backtestStats
+        };
+
+        const json = JSON.stringify(exportData, null, 2);
+        const blob = new Blob([json], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        const dateStr = todayStr();
+        a.href = url;
+        a.download = `coin-radar-export-${dateStr}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+        setStatus(`✅ Dışa aktarma tamamlandı — ${Object.keys(klines).length} coin, ${Object.keys(signals).length} sinyal, ${Object.keys(dipSignals).length} dip sinyali indirildi.`, "ok");
+    } catch (e) {
+        console.error(e);
+        setStatus("❌ Dışa aktarma hatası: " + e.message, "error");
+    } finally {
+        if (btn) { btn.textContent = originalText; btn.disabled = false; }
     }
 }
 
