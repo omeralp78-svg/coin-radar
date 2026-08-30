@@ -44,7 +44,7 @@
         font-size: 15px;
     }
     .mono { font-family: 'IBM Plex Mono', monospace; }
-    .wrap { max-width: 1080px; margin: 0 auto; padding: 0 20px; }
+    .wrap { max-width: 1600px; margin: 0 auto; padding: 0 32px; }
 
     ::selection { background: var(--amber); color: #000; }
     ::-webkit-scrollbar { width: 10px; height: 10px; }
@@ -313,6 +313,17 @@
 </head>
 <body>
 <div class="wrap">
+
+    <div id="timing-bar" style="display:flex; gap:24px; flex-wrap:wrap; align-items:center; justify-content:space-between; background:var(--bg-elev); border:2px solid var(--border-soft); border-radius:12px; padding:12px 18px; margin-top:18px; margin-bottom:-4px;">
+        <div>
+            <span style="font-size:11px; color:var(--muted); font-weight:700; text-transform:uppercase; letter-spacing:0.04em;">🕐 Son Analiz</span>
+            <div id="last-scan-display" class="mono" style="font-size:15px; font-weight:800; color:var(--text); margin-top:2px;">Henüz tarama yapılmadı</div>
+        </div>
+        <div style="text-align:right;">
+            <span style="font-size:11px; color:var(--muted); font-weight:700; text-transform:uppercase; letter-spacing:0.04em;">⏱ Sonraki Otomatik Yenileme</span>
+            <div id="next-scan-display" class="mono" style="font-size:15px; font-weight:800; color:var(--amber); margin-top:2px;">Otomatik tarama kapalı</div>
+        </div>
+    </div>
 
     <header>
         <div class="header-row">
@@ -869,6 +880,8 @@ async function runScan() {
 
         await recalcSignals();
         setStatus(`✅ Tamamlandı. ${top30.length} coin kaydedildi, ${symbols.length} sembol saatlik veriyle analiz edildi.`, "ok");
+        localStorage.setItem("pumpwatch_last_scan_completed", String(Date.now()));
+        updateTimingDisplays();
     } catch (e) {
         console.error(e);
         setStatus("❌ Hata: " + e.message, "error");
@@ -1926,6 +1939,7 @@ function startAutoScan() {
     }, AUTO_SCAN_INTERVAL_MS);
     localStorage.setItem("pumpwatch_autoscan_enabled", "true");
     updateAutoScanStatusText();
+    if (typeof updateTimingDisplays === "function") updateTimingDisplays();
 }
 
 function stopAutoScan() {
@@ -1944,6 +1958,7 @@ function onAutoScanToggle() {
     } else {
         stopAutoScan();
     }
+    if (typeof updateTimingDisplays === "function") updateTimingDisplays();
 }
 
 function updateAutoScanStatusText() {
@@ -1955,6 +1970,41 @@ function updateAutoScanStatusText() {
     if (!last) { el.textContent = "Açık"; return; }
     const mins = Math.round((Date.now() - last) / 60000);
     el.textContent = `Açık — son tarama ${mins} dk önce`;
+}
+
+/** Ust banttaki "Son Analiz" ve "Sonraki Otomatik Yenileme" yazilarini gunceller. */
+function updateTimingDisplays() {
+    const lastScanEl = document.getElementById("last-scan-display");
+    const nextScanEl = document.getElementById("next-scan-display");
+    if (!lastScanEl || !nextScanEl) return;
+
+    const lastCompleted = parseInt(localStorage.getItem("pumpwatch_last_scan_completed") || "0", 10);
+    if (lastCompleted) {
+        const d = new Date(lastCompleted);
+        const tarih = d.toLocaleDateString('tr-TR', { day: '2-digit', month: 'long', year: 'numeric' });
+        const saat = d.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        lastScanEl.textContent = `${tarih} — ${saat}`;
+    } else {
+        lastScanEl.textContent = "Henüz tarama yapılmadı";
+    }
+
+    const autoEnabled = localStorage.getItem("pumpwatch_autoscan_enabled") === "true";
+    if (!autoEnabled) {
+        nextScanEl.textContent = "Otomatik tarama kapalı";
+        nextScanEl.style.color = "var(--muted-dim)";
+        return;
+    }
+    const lastAuto = parseInt(localStorage.getItem("pumpwatch_last_autoscan") || "0", 10);
+    if (!lastAuto) {
+        nextScanEl.textContent = "Az sonra...";
+        return;
+    }
+    const remainingMs = Math.max(0, AUTO_SCAN_INTERVAL_MS - (Date.now() - lastAuto));
+    const totalSec = Math.floor(remainingMs / 1000);
+    const mm = Math.floor(totalSec / 60);
+    const ss = totalSec % 60;
+    nextScanEl.style.color = "var(--amber)";
+    nextScanEl.textContent = remainingMs <= 0 ? "Şimdi taranıyor..." : `${mm}:${ss.toString().padStart(2, '0')} dakika sonra`;
 }
 
 // Sekme tekrar goruntulenince (telefon kilitliyken/arka plandayken atlanmis olabilecek
@@ -1975,7 +2025,9 @@ document.addEventListener("visibilitychange", () => {
         document.getElementById("autoscan-toggle").checked = true;
         startAutoScan();
     }
+    updateTimingDisplays();
     setInterval(updateAutoScanStatusText, 30000); // durum yazisini her 30 saniyede tazele
+    setInterval(updateTimingDisplays, 1000); // ust banttaki geri sayimi her saniye tazele
 })();
 
 </script>
