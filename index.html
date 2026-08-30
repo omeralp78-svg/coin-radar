@@ -4,6 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Coin Radar — Tekrar Patlama Takibi</title>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
 
@@ -268,9 +270,11 @@
                 <div class="brand-text">
                     <h1>Coin Radar</h1>
                     <div class="tag">Geçmişte patlayıp düşen, yeniden patlama ihtimali taşıyan coinleri izler</div>
+                    <div class="tag" id="db-status-tag" style="margin-top:4px;"></div>
                 </div>
             </div>
             <div class="icon-actions">
+                <button class="icon-btn" onclick="openStatsPanel()">📊 Başarı Oranı</button>
                 <button class="icon-btn" onclick="recalcSignals()">↻ Yeniden hesapla</button>
                 <button class="icon-btn" onclick="clearAll()">⌫ Sıfırla</button>
                 <button id="scan-btn" onclick="runScan()">▶ Bugünü Tara</button>
@@ -352,8 +356,9 @@
 
     <footer class="disclaimer">
         Bu bir yatırım tavsiyesi değildir, sadece geçmiş fiyat hareketlerine bakan bir izleme aracıdır.
-        Veriler bu tarayıcıda (localStorage) saklanır — başka bir cihazda sıfırdan başlar. Otomatik
-        çalışmaz, güncel kalması için her gün "Bugünü Tara" butonuna basman gerekir.
+        Firebase bağlıysa veriler bulutta saklanır ve tüm cihazlarda aynı görünür; bağlı değilse
+        sadece bu tarayıcıda (localStorage) tutulur. Otomatik çalışmaz, güncel kalması için her gün
+        "Bugünü Tara" butonuna basman gerekir.
     </footer>
 
 </div>
@@ -366,17 +371,73 @@
     </div>
 </div>
 
+<!-- Basari Orani Paneli -->
+<div class="modal-overlay" id="stats-overlay" onclick="if(event.target===this) closeStatsPanel()">
+    <div class="modal-box">
+        <button class="modal-close" onclick="closeStatsPanel()">×</button>
+        <div id="stats-content"></div>
+    </div>
+</div>
+
 <script>
 const API_BASE = "https://fapi.binance.com";
 const TOP_N = 30;
 const WATCHLIST_RETENTION_DAYS = 14;
 
+// ---------- Firebase / Firestore baglantisi ----------
+// Asagiya kendi Firebase projenin config bilgilerini yapistir.
+// (Firebase Console > Project Settings > Genel > "Your apps" altindaki kod bloğu)
+const firebaseConfig = {
+    apiKey: "AIzaSyA07EGg8Xy6p5Pyk2stddOsSusSBYxgYvc",
+    authDomain: "coin-radar-c7f54.firebaseapp.com",
+    projectId: "coin-radar-c7f54",
+    storageBucket: "coin-radar-c7f54.firebasestorage.app",
+    messagingSenderId: "752488236590",
+    appId: "1:752488236590:web:107f48f25db7adf3e3c1bf"
+};
+
+const FIREBASE_CONFIGURED = firebaseConfig.apiKey && firebaseConfig.apiKey !== "BURAYA_YAPISTIR";
+let db = null;
+if (FIREBASE_CONFIGURED) {
+    firebase.initializeApp(firebaseConfig);
+    db = firebase.firestore();
+}
+
+// store.get / store.set artik ASYNC - Firestore yapilandirilmissa oradan okur/yazar,
+// yapilandirilmamissa (config yapistirilmadiysa) bu cihaza ozel localStorage'a duser.
 const store = {
-    get(key, fallback) {
+    async get(key, fallback) {
+        if (db) {
+            try {
+                const doc = await db.collection("pumpwatch").doc(key).get();
+                return doc.exists ? doc.data().value : fallback;
+            } catch (e) {
+                console.error("Firestore okuma hatasi:", e);
+                return fallback;
+            }
+        }
         try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; }
         catch (e) { return fallback; }
     },
-    set(key, value) { localStorage.setItem(key, JSON.stringify(value)); }
+    async set(key, value) {
+        if (db) {
+            try {
+                await db.collection("pumpwatch").doc(key).set({ value });
+                return;
+            } catch (e) {
+                console.error("Firestore yazma hatasi:", e);
+                return;
+            }
+        }
+        localStorage.setItem(key, JSON.stringify(value));
+    },
+    async delete(key) {
+        if (db) {
+            try { await db.collection("pumpwatch").doc(key).delete(); return; }
+            catch (e) { console.error("Firestore silme hatasi:", e); return; }
+        }
+        localStorage.removeItem(key);
+    }
 };
 
 const KEYS = {
@@ -437,11 +498,11 @@ async function runScan() {
         tickers.sort((a, b) => b.changePercent - a.changePercent);
         const top30 = tickers.slice(0, TOP_N);
 
-        const snapshots = store.get(KEYS.snapshots, {});
+        const snapshots = await store.get(KEYS.snapshots, {});
         snapshots[today] = top30;
-        store.set(KEYS.snapshots, snapshots);
+        await store.set(KEYS.snapshots, snapshots);
 
-        const watchlist = store.get(KEYS.watchlist, {});
+        const watchlist = await store.get(KEYS.watchlist, {});
         for (const t of top30) {
             if (!watchlist[t.symbol]) watchlist[t.symbol] = { firstSeen: today, lastSeen: today };
             else watchlist[t.symbol].lastSeen = today;
@@ -450,12 +511,12 @@ async function runScan() {
             const daysSince = (new Date(today) - new Date(watchlist[sym].lastSeen)) / 86400000;
             if (daysSince > WATCHLIST_RETENTION_DAYS) delete watchlist[sym];
         }
-        store.set(KEYS.watchlist, watchlist);
+        await store.set(KEYS.watchlist, watchlist);
 
-        renderTop30();
+        await renderTop30();
 
         const symbols = Object.keys(watchlist);
-        const klinesStore = store.get(KEYS.klines, {});
+        const klinesStore = await store.get(KEYS.klines, {});
         let done = 0;
         for (const symbol of symbols) {
             try {
@@ -469,9 +530,9 @@ async function runScan() {
             setStatus(`⏳ Coin geçmişleri inceleniyor... (${done}/${symbols.length})`);
             await sleep(120);
         }
-        store.set(KEYS.klines, klinesStore);
+        await store.set(KEYS.klines, klinesStore);
 
-        recalcSignals();
+        await recalcSignals();
         setStatus(`✅ Tamamlandı. ${top30.length} coin kaydedildi, ${symbols.length} sembol analiz edildi.`, "ok");
     } catch (e) {
         console.error(e);
@@ -492,9 +553,10 @@ function getConfig() {
     };
 }
 
-function recalcSignals() {
+async function recalcSignals() {
     const cfg = getConfig();
-    const klinesStore = store.get(KEYS.klines, {});
+    const klinesStore = await store.get(KEYS.klines, {});
+    const previousSignals = await store.get(KEYS.signals, {});
     const signals = {};
 
     for (const symbol of Object.keys(klinesStore)) {
@@ -528,20 +590,29 @@ function recalcSignals() {
                 reentryPct = rows[reentryIdx].changePercent;
             } else {
                 const daysSincePump = (new Date(todayStr()) - new Date(pumpDate)) / 86400000;
-                if (daysSincePump > cfg.REENTRY_WINDOW_DAYS) continue;
-                status = "WATCHING";
+                // Pencere kapandiysa ve tekrar patlama olmadiysa "EXPIRED" olarak sakla -
+                // bu, basari orani hesabinda basarisiz denemeleri de saymamiz icin gerekli
+                // (yoksa sadece basarili olanlari sayip yanlis bir isabet orani gosteririz).
+                status = daysSincePump > cfg.REENTRY_WINDOW_DAYS ? "EXPIRED" : "WATCHING";
             }
 
-            signals[symbol + "_" + pumpDate] = {
+            const key = symbol + "_" + pumpDate;
+            const prev = previousSignals[key];
+
+            signals[key] = {
                 symbol, pumpDate, pumpChange, pumpHigh, pullbackPct,
                 pullbackDate: rows[pullbackIdx].date, pullbackPrice: rows[pullbackIdx].close,
-                status, reentryDate, reentryPct
+                status, reentryDate, reentryPct,
+                // Daha once arka planda yapilmis sikisma kontrolu varsa koru (yeniden hesaplamada kaybolmasin)
+                squeezeChecked: prev ? prev.squeezeChecked : false,
+                squeezeAllPass: prev ? prev.squeezeAllPass : null,
+                squeezeCheckedAt: prev ? prev.squeezeCheckedAt : null
             };
         }
     }
 
-    store.set(KEYS.signals, signals);
-    renderSignals();
+    await store.set(KEYS.signals, signals);
+    await renderSignals();
 }
 
 function latestClose(klinesStore, symbol) {
@@ -552,8 +623,8 @@ function latestClose(klinesStore, symbol) {
     return dateMap[dates[dates.length - 1]].close;
 }
 
-function renderTop30() {
-    const snapshots = store.get(KEYS.snapshots, {});
+async function renderTop30() {
+    const snapshots = await store.get(KEYS.snapshots, {});
     const dates = Object.keys(snapshots).sort();
     const latestDate = dates[dates.length - 1];
     const body = document.getElementById("top30-body");
@@ -576,12 +647,12 @@ function renderTop30() {
     `).join('');
 }
 
-function renderSignals() {
+async function renderSignals() {
     const cfg = getConfig();
-    const signals = store.get(KEYS.signals, {});
-    const klinesStore = store.get(KEYS.klines, {});
+    const signals = await store.get(KEYS.signals, {});
+    const klinesStore = await store.get(KEYS.klines, {});
 
-    const snapshots = store.get(KEYS.snapshots, {});
+    const snapshots = await store.get(KEYS.snapshots, {});
     const dates = Object.keys(snapshots).sort();
     const today = todayStr();
     const latestDate = dates[dates.length - 1];
@@ -670,11 +741,11 @@ function renderSignals() {
     }
 }
 
-function clearAll() {
+async function clearAll() {
     if (!confirm("Tüm kaydedilen veriler silinecek, sıfırdan başlayacaksın. Emin misin?")) return;
-    Object.values(KEYS).forEach(k => localStorage.removeItem(k));
-    renderTop30();
-    renderSignals();
+    for (const k of Object.values(KEYS)) await store.delete(k);
+    await renderTop30();
+    await renderSignals();
     setStatus("🗑 Her şey sıfırlandı.", "ok");
 }
 
@@ -704,6 +775,19 @@ async function runBackgroundSqueezeChecks(watchingList) {
             } else {
                 const passCount = [sq.bbSqueeze, (sq.oiRising && sq.priceFlat), sq.fundingNeg].filter(Boolean).length;
                 freshCell.innerHTML = `<span class="num" style="color:var(--muted-dim);">${passCount}/3</span>`;
+            }
+
+            // Sonucu kalici olarak signals deposuna yaz - bu, "Basari Orani" panelinde
+            // sikisma etiketi alan sinyallerin gercekten isabet edip etmedigini olcmemizi saglar.
+            if (sq.available) {
+                const signals = await store.get(KEYS.signals, {});
+                const key = r.symbol + "_" + r.pumpDate;
+                if (signals[key]) {
+                    signals[key].squeezeChecked = true;
+                    signals[key].squeezeAllPass = sq.allPass;
+                    signals[key].squeezeCheckedAt = todayStr();
+                    await store.set(KEYS.signals, signals);
+                }
             }
         } catch (e) {
             const freshCell = document.getElementById(cellId);
@@ -1025,8 +1109,197 @@ function renderAnalysisHtml(symbol, d) {
     `;
 }
 
+// ================= BACKTEST / BASARI ORANI PANELI =================
+
+function closeStatsPanel() {
+    document.getElementById("stats-overlay").classList.remove("open");
+}
+
+async function openStatsPanel() {
+    const overlay = document.getElementById("stats-overlay");
+    const content = document.getElementById("stats-content");
+    overlay.classList.add("open");
+    content.innerHTML = '<div class="modal-loading">⏳ İstatistikler hesaplanıyor...</div>';
+    content.innerHTML = renderStatsHtml(await computeBacktestStats());
+}
+
+/**
+ * Her sinyalin pullback tarihinden itibaren +1, +2, +3 gun sonraki
+ * fiyat hareketine bakip "hedefe ulasti mi" (REENTRY_THRESHOLD) kontrol eder.
+ * Sadece o gunun verisi elimizde varsa (yani o gun gecmisse) degerlendirmeye katar.
+ */
+async function computeBacktestStats() {
+    const cfg = getConfig();
+    const signals = await store.get(KEYS.signals, {});
+    const klinesStore = await store.get(KEYS.klines, {});
+    const today = todayStr();
+
+    const horizons = [1, 2, 3]; // gun cinsinden ~ 24s, 48s, 72s
+    const results = { 1: { hit: 0, total: 0 }, 2: { hit: 0, total: 0 }, 3: { hit: 0, total: 0 } };
+    const squeezeResults = { pass: { hit: 0, total: 0 }, fail: { hit: 0, total: 0 } };
+    let pendingCount = 0;
+    let evaluatedSignalCount = 0;
+
+    for (const sig of Object.values(signals)) {
+        const dateMap = klinesStore[sig.symbol];
+        if (!dateMap) continue;
+        const dates = Object.keys(dateMap).sort();
+        const pullbackIdx = dates.indexOf(sig.pullbackDate);
+        if (pullbackIdx === -1) continue;
+
+        let horizonHitAny = false; // 3 gun icinde herhangi bir noktada hedefe ulasti mi (sikisma karsilastirmasi icin)
+        let anyHorizonEvaluated = false;
+
+        for (const h of horizons) {
+            const targetDate = new Date(sig.pullbackDate);
+            targetDate.setDate(targetDate.getDate() + h);
+            const targetDateStr = targetDate.toISOString().slice(0, 10);
+
+            // O tarih bugunden ileriyse henuz degerlendirilemez
+            if (targetDateStr > today) continue;
+
+            const idx = dates.indexOf(targetDateStr);
+            if (idx === -1) continue; // o gune ait veri eksik (coin listeden dusmus olabilir)
+
+            // pullback ile hedef tarih arasindaki EN YUKSEK fiyata bak (sadece o gunku kapanisa degil)
+            let maxClose = sig.pullbackPrice;
+            for (let x = pullbackIdx; x <= idx; x++) {
+                const c = dateMap[dates[x]].close;
+                if (c > maxClose) maxClose = c;
+            }
+            const movePct = ((maxClose - sig.pullbackPrice) / sig.pullbackPrice) * 100;
+            const hit = movePct >= cfg.REENTRY_THRESHOLD;
+
+            results[h].total++;
+            if (hit) results[h].hit++;
+            anyHorizonEvaluated = true;
+            if (h === 3) horizonHitAny = hit;
+        }
+
+        if (anyHorizonEvaluated) evaluatedSignalCount++;
+        else pendingCount++;
+
+        // Sikisma karsilastirmasi: sadece squeeze kontrolu yapilmis VE 3 gunluk sonuc belli olan sinyaller
+        const targetDate3 = new Date(sig.pullbackDate);
+        targetDate3.setDate(targetDate3.getDate() + 3);
+        const resolved3Day = targetDate3.toISOString().slice(0, 10) <= today && dates.indexOf(targetDate3.toISOString().slice(0, 10)) !== -1;
+
+        if (sig.squeezeChecked && resolved3Day) {
+            const bucket = sig.squeezeAllPass ? squeezeResults.pass : squeezeResults.fail;
+            bucket.total++;
+            if (horizonHitAny) bucket.hit++;
+        }
+    }
+
+    return {
+        cfg, results, squeezeResults, pendingCount, evaluatedSignalCount,
+        totalSignals: Object.keys(signals).length
+    };
+}
+
+function renderStatsHtml(stats) {
+    const { cfg, results, squeezeResults, pendingCount, evaluatedSignalCount, totalSignals } = stats;
+
+    if (totalSignals === 0) {
+        return `
+            <div class="modal-title">📊 Sistem Başarı Oranı</div>
+            <div class="empty-state" style="padding:30px 0;">
+                Henüz hiç sinyal üretilmedi. Birkaç gün "Bugünü Tara" butonuna bastıktan sonra
+                burada istatistikler görünmeye başlayacak.
+            </div>
+        `;
+    }
+
+    function rateRow(label, r) {
+        const rate = r.total > 0 ? (r.hit / r.total * 100) : null;
+        const barColor = rate == null ? 'var(--muted-dim)' : rate >= 50 ? 'var(--teal)' : rate >= 30 ? 'var(--amber)' : 'var(--coral)';
+        return `
+            <div class="metric-box">
+                <div class="metric-label">${label}</div>
+                <div class="metric-value" style="color:${barColor};">${rate != null ? rate.toFixed(0) + '%' : '-'}</div>
+                <div class="metric-note">${r.total} sinyalden ${r.hit} tanesi hedefe (+%${cfg.REENTRY_THRESHOLD}) ulaştı</div>
+            </div>
+        `;
+    }
+
+    const rate72 = results[3].total > 0 ? (results[3].hit / results[3].total * 100) : null;
+    let adviceText;
+    if (results[3].total < 5) {
+        adviceText = "Henüz güvenilir bir yorum yapmak için yeterli sinyal birikmedi (en az 5-10 tamamlanmış sinyal gerekir). Veri toplamaya devam et.";
+    } else if (rate72 >= 55) {
+        adviceText = "72 saatlik isabet oranın oldukça iyi görünüyor. Şu anki eşik ayarların (Patlama %" + cfg.PUMP_THRESHOLD + ", Geri Çekilme %" + cfg.PULLBACK_MIN + ") işe yarıyor gibi duruyor; büyük bir değişikliğe gerek olmayabilir.";
+    } else if (rate72 >= 35) {
+        adviceText = "Orta düzeyde bir isabet oranı var. Geri çekilme eşiğini biraz yükseltmeyi (örn. %5 yerine %8-10) veya tekrar patlama eşiğini düşürmeyi (örn. %10 yerine %7) deneyip sonucun değişip değişmediğini gözlemleyebilirsin.";
+    } else {
+        adviceText = "İsabet oranı düşük görünüyor. Bu, ya eşiklerin çok gevşek olduğunu (çok fazla 'aday' üretiliyor ama çoğu tutmuyor) ya da piyasa koşullarının bu örüntüye şu sıralar uygun olmadığını gösterebilir. Patlama eşiğini yükseltmeyi (örn. %20 yerine %30) veya pullback penceresini daraltmayı deneyebilirsin.";
+    }
+
+    const squeezeHasData = squeezeResults.pass.total >= 3 || squeezeResults.fail.total >= 3;
+
+    return `
+        <div class="modal-title">📊 Sistem Başarı Oranı</div>
+        <div class="modal-subtitle">Toplam ${totalSignals} sinyal üretildi · ${evaluatedSignalCount} tanesi en az bir ufuk için değerlendirildi · ${pendingCount} tanesi henüz sonuçlanmadı (yeterli gün geçmedi)</div>
+
+        <div class="modal-section-title">Ufuklara Göre İsabet Oranı</div>
+        <div class="metric-grid" style="grid-template-columns: repeat(3, 1fr);">
+            ${rateRow("24 Saat", results[1])}
+            ${rateRow("48 Saat", results[2])}
+            ${rateRow("72 Saat", results[3])}
+        </div>
+
+        <div class="verdict-box verdict-neutral">
+            <div class="verdict-title">💡 Öneri</div>
+            ${adviceText}
+        </div>
+
+        ${squeezeHasData ? `
+        <div class="modal-section-title">🎯 Sıkışma Etiketi Farkı (72 saat, 3+ gün önce kontrol edilenler)</div>
+        <div class="metric-grid">
+            <div class="metric-box">
+                <div class="metric-label">🎯 Sıkışma Var etiketi alanlar</div>
+                <div class="metric-value pos">${squeezeResults.pass.total > 0 ? (squeezeResults.pass.hit / squeezeResults.pass.total * 100).toFixed(0) + '%' : '-'}</div>
+                <div class="metric-note">${squeezeResults.pass.total} sinyalden ${squeezeResults.pass.hit} tanesi hedefe ulaştı</div>
+            </div>
+            <div class="metric-box">
+                <div class="metric-label">Sıkışma etiketi almayanlar</div>
+                <div class="metric-value">${squeezeResults.fail.total > 0 ? (squeezeResults.fail.hit / squeezeResults.fail.total * 100).toFixed(0) + '%' : '-'}</div>
+                <div class="metric-note">${squeezeResults.fail.total} sinyalden ${squeezeResults.fail.hit} tanesi hedefe ulaştı</div>
+            </div>
+        </div>
+        ` : `
+        <div class="modal-section-title">🎯 Sıkışma Etiketi Farkı</div>
+        <div class="empty-state" style="padding:20px 0;">
+            Sıkışma etiketinin gerçekten fark yaratıp yaratmadığını görmek için henüz yeterli veri yok
+            (en az birkaç sinyalin hem sıkışma kontrolünden geçmiş hem de 3 günlük sonucu belli olmuş
+            olması gerekiyor). Coin detaylarını tıklayarak ve günlük taramaya devam ederek bu veri birikecek.
+        </div>
+        `}
+
+        <div class="modal-disclaimer">
+            "Hedef", ayarlardaki "Tekrar patlama eşiği" (%${cfg.REENTRY_THRESHOLD}) olarak alınır — geri çekilme
+            fiyatından itibaren en yüksek noktanın bu eşiğe ulaşıp ulaşmadığına bakılır. Bu istatistik yalnızca
+            bu tarayıcıda topladığın veriye dayanır, küçük örneklemlerde (özellikle 10'un altında sinyalde)
+            yanıltıcı olabilir. Eşikleri değiştirdiğinde geçmiş sinyaller yeniden hesaplanır, bu yüzden oranlar
+            zamanla değişebilir.
+        </div>
+    `;
+}
+
 renderTop30();
 renderSignals();
+
+// Veritabani baglanti durumunu goster
+(function showDbStatus() {
+    const el = document.getElementById("db-status-tag");
+    if (FIREBASE_CONFIGURED) {
+        el.innerHTML = '🟢 Bulut veritabanına bağlı — tüm cihazlardan aynı veriyi görürsün';
+        el.style.color = "var(--teal)";
+    } else {
+        el.innerHTML = '🟡 Cihaza özel mod (Firebase config eklenmedi) — veri sadece bu tarayıcıda';
+        el.style.color = "var(--amber)";
+    }
+})();
+
 </script>
 
 </body>
