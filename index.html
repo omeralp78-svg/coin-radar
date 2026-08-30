@@ -113,6 +113,26 @@
     .icon-btn:hover { border-color: var(--amber); transform: translateY(-1px); }
     .icon-btn:active { transform: translateY(0) scale(0.97); }
 
+    /* Dip Toparlanma aday sayisi rozeti - dikkat cekmesi icin yanip soner */
+    .nav-badge {
+        position: absolute; top: -8px; right: -8px;
+        min-width: 20px; height: 20px; padding: 0 5px;
+        background: var(--pink); color: #fff;
+        border-radius: 999px; font-size: 11px; font-weight: 800;
+        display: flex; align-items: center; justify-content: center;
+        border: 2px solid var(--bg);
+        animation: badge-flash 1.1s ease-in-out infinite;
+    }
+    @keyframes badge-flash {
+        0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(255,59,59,0.7); }
+        50% { transform: scale(1.15); box-shadow: 0 0 0 6px rgba(255,59,59,0); }
+    }
+    #dip-nav-btn.has-candidates { border-color: var(--pink); animation: btn-flash 1.1s ease-in-out infinite; }
+    @keyframes btn-flash {
+        0%, 100% { background: var(--bg-elev); }
+        50% { background: var(--pink-dim); }
+    }
+
     #status-msg {
         display: block; margin-top: 12px; font-size: 13px; color: var(--muted); font-weight: 600;
         min-height: 18px;
@@ -336,7 +356,7 @@
                 </div>
             </div>
             <div class="icon-actions">
-                <button class="icon-btn" onclick="openDipPage()">📉 Dip Toparlanma</button>
+                <button class="icon-btn" id="dip-nav-btn" onclick="openDipPage()" style="position:relative;">📉 Dip Toparlanma<span id="dip-badge" class="nav-badge" style="display:none;"></span></button>
                 <button class="icon-btn" onclick="openDatabasePage()">📚 Coin Veritabanı</button>
                 <button class="icon-btn" onclick="openOptimizerPanel()">🔬 Eşik Optimizasyonu</button>
                 <button class="icon-btn" onclick="openStatsPanel()">📊 Başarı Oranı</button>
@@ -970,6 +990,7 @@ async function recalcSignals() {
     await store.set(KEYS.signals, signals);
     await store.set(KEYS.dipSignals, dipSignals);
     await renderSignals();
+    await updateDipBadge();
 }
 
 /**
@@ -1782,6 +1803,38 @@ function applyOptimizedConfig(pm, plm, rm) {
 
 function closeDipPage() { document.getElementById("dip-overlay").classList.remove("open"); }
 
+/** Menudeki "Dip Toparlanma" butonunun rozetini gunceller - butona girmeden dikkat cekmesi icin. */
+async function updateDipBadge() {
+    const btn = document.getElementById("dip-nav-btn");
+    const badge = document.getElementById("dip-badge");
+    if (!btn || !badge) return;
+
+    const dipSignals = await store.get(KEYS.dipSignals, {});
+    const snapshots = await store.get(KEYS.snapshots, {});
+    const dates = Object.keys(snapshots).sort();
+    const today = todayStr();
+    const latestDate = dates[dates.length - 1];
+    const todaysSymbols = new Set((latestDate ? snapshots[latestDate] : []).map(r => r.symbol));
+    const isTodaysSnapshotFresh = latestDate === today;
+
+    let count = 0;
+    for (const sig of Object.values(dipSignals)) {
+        if (sig.status !== "WATCHING") continue;
+        if (isTodaysSnapshotFresh && todaysSymbols.has(sig.symbol)) continue;
+        count++;
+    }
+
+    if (count > 0) {
+        badge.textContent = count > 99 ? "99+" : String(count);
+        badge.style.display = "flex";
+        btn.classList.add("has-candidates");
+    } else {
+        badge.style.display = "none";
+        btn.classList.remove("has-candidates");
+    }
+}
+
+
 async function openDipPage() {
     const overlay = document.getElementById("dip-overlay");
     overlay.classList.add("open");
@@ -2091,6 +2144,7 @@ async function renderCoinDetail(symbol) {
 
 renderTop30();
 renderSignals();
+updateDipBadge();
 
 // Firestore'da kayitli ayarlar varsa (GitHub Action ya da baska bir cihazdan kaydedilmis olabilir)
 // sayfa acilirken input alanlarina yukle - boylece iki sistem hep ayni esikleri kullanir.
