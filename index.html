@@ -544,10 +544,70 @@ const store = {
     }
 };
 
-// KEYS.klines artik SAATLIK veri tutuyor (eski gunluk formattan tamamen ayrildi - karisiklik olmasin diye)
+// ---------- Saatlik kline verisi icin OZEL depolama: COIN BASINA AYRI BELGE ----------
+// ONEMLI: Firestore'da bir belge en fazla 1 MB olabilir. Tum coinlerin saatlik verisini
+// TEK bir dev belgede tutmak (eski yontem) zamanla 1 MB'i asip yazmayi tamamen durduruyordu -
+// bu yuzden sinyaller hic uretilemiyordu. Cozum: her coin kendi kucuk belgesinde saklanir.
+const KLINES_COLLECTION = "pumpwatch_klines";
+
+async function getAllKlines() {
+    if (!db) {
+        try { const v = localStorage.getItem("pumpwatch_klines_hourly"); return v ? JSON.parse(v) : {}; }
+        catch (e) { return {}; }
+    }
+    try {
+        const snapshot = await db.collection(KLINES_COLLECTION).get();
+        const result = {};
+        snapshot.forEach(doc => { result[doc.id] = doc.data().value || {}; });
+        return result;
+    } catch (e) { console.error("Firestore (klines) okuma hatasi:", e); return {}; }
+}
+
+async function getSymbolKlines(symbol) {
+    if (!db) {
+        const all = await getAllKlines();
+        return all[symbol] || {};
+    }
+    try {
+        const doc = await db.collection(KLINES_COLLECTION).doc(symbol).get();
+        return doc.exists ? (doc.data().value || {}) : {};
+    } catch (e) { console.error("Firestore (klines/" + symbol + ") okuma hatasi:", e); return {}; }
+}
+
+/** Coinin verisini TAMAMEN DEGISTIRIR (birikerek buyumesin diye - Binance zaten her seferinde tam pencereyi getiriyor). */
+async function setSymbolKlines(symbol, dateMap) {
+    if (!db) {
+        const all = await getAllKlines();
+        all[symbol] = dateMap;
+        localStorage.setItem("pumpwatch_klines_hourly", JSON.stringify(all));
+        return;
+    }
+    try { await db.collection(KLINES_COLLECTION).doc(symbol).set({ value: dateMap }); }
+    catch (e) { console.error("Firestore (klines/" + symbol + ") yazma hatasi:", e); }
+}
+
+async function deleteAllKlines() {
+    if (!db) { localStorage.removeItem("pumpwatch_klines_hourly"); return; }
+    try {
+        const snapshot = await db.collection(KLINES_COLLECTION).get();
+        const batch = db.batch();
+        snapshot.forEach(doc => batch.delete(doc.ref));
+        await batch.commit();
+    } catch (e) { console.error("Firestore (klines) toplu silme hatasi:", e); }
+}
+
+function latestCloseFromMap(dateMap) {
+    if (!dateMap) return null;
+    const dates = Object.keys(dateMap).sort();
+    if (!dates.length) return null;
+    return dateMap[dates[dates.length - 1]].close;
+}
+
+// KEYS.klines artik dogrudan kullanilmiyor (coin basina ayri belgelere gecildi) - eski/bozuk
+// dev belgeyi temizlemek icin referans olarak duruyor.
 const KEYS = {
     snapshots: "pumpwatch_snapshots",     // gunluk top30 goruntusu (degismedi)
-    klines: "pumpwatch_klines_hourly",    // { symbol: { "YYYY-MM-DD_HH": {open,high,low,close,volume} } }
+    klines: "pumpwatch_klines_hourly",    // ESKI/ARTIK KULLANILMIYOR - sadece temizlik icin referans
     btcKlines: "pumpwatch_btc_hourly",    // { "YYYY-MM-DD_HH": {open,high,low,close,volume} } - tek seri, BTC referans
     watchlist: "pumpwatch_watchlist",
     signals: "pumpwatch_signals_v2",      // v2: saatlik + ATR + BTC alanlari icerir, eski formatla karismasin diye yeni anahtar
@@ -798,31 +858,30 @@ async function runScan() {
 
         // BTC referans serisini bir kez cek (tum semboller icin ortak kullanilacak)
         setStatus("⏳ BTC referans verisi alınıyor...");
-        let btcKlinesStore = await store.get(KEYS.btcKlines, {});
         try {
             const btcKlines = await fetchHourlyKlines("BTCUSDT", HOURLY_FETCH_LIMIT);
-            for (const k of btcKlines) btcKlinesStore[k.date] = { open: k.open, high: k.high, low: k.low, close: k.close, volume: k.volume };
-            await store.set(KEYS.btcKlines, btcKlinesStore);
+            const freshBtcMap = {};
+            for (const k of btcKlines) freshBtcMap[k.date] = { open: k.open, high: k.high, low: k.low, close: k.close, volume: k.volume };
+            await store.set(KEYS.btcKlines, freshBtcMap); // DEGISTIR, biriktirme - boyut sabit kalsin
         } catch (e) { console.warn("BTC verisi alinamadi:", e.message); }
 
         const symbols = Object.keys(watchlist);
-        const klinesStore = await store.get(KEYS.klines, {});
         const oiHistory = await store.get(KEYS.oiHistory, {});
         let done = 0;
         for (const symbol of symbols) {
+            let freshMap = null;
             try {
                 const klines = await fetchHourlyKlines(symbol, HOURLY_FETCH_LIMIT);
-                if (!klinesStore[symbol]) klinesStore[symbol] = {};
-                for (const k of klines) {
-                    klinesStore[symbol][k.date] = { open: k.open, high: k.high, low: k.low, close: k.close, volume: k.volume };
-                }
+                freshMap = {};
+                for (const k of klines) freshMap[k.date] = { open: k.open, high: k.high, low: k.low, close: k.close, volume: k.volume };
+                await setSymbolKlines(symbol, freshMap); // DEGISTIR (bu coinin KENDI kucuk belgesine) - biriktirme yok
             } catch (e) { console.warn(e.message); }
 
             // Gunluk OI (acik pozisyon) kaydi - Coin Veritabani sayfasinda gun gun gorebilmek icin
             try {
                 const oiData = await safeFetchJson(`${API_BASE}/fapi/v1/openInterest?symbol=${symbol}`);
-                if (oiData) {
-                    const lastPrice = latestClose(klinesStore, symbol);
+                if (oiData && freshMap) {
+                    const lastPrice = latestCloseFromMap(freshMap);
                     const oiUsd = lastPrice ? parseFloat(oiData.openInterest) * lastPrice : parseFloat(oiData.openInterest);
                     if (!oiHistory[symbol]) oiHistory[symbol] = {};
                     oiHistory[symbol][today] = oiUsd;
@@ -833,7 +892,6 @@ async function runScan() {
             setStatus(`⏳ Coin geçmişleri inceleniyor... (${done}/${symbols.length})`);
             await sleep(120);
         }
-        await store.set(KEYS.klines, klinesStore);
         await store.set(KEYS.oiHistory, oiHistory);
 
         await recalcSignals();
@@ -870,7 +928,7 @@ function getConfig() {
 async function recalcSignals() {
     const cfg = getConfig();
     await store.set(KEYS.config, cfg); // GitHub Action ile ayni ayarlari kullansin diye kaydet
-    const klinesStore = await store.get(KEYS.klines, {});
+    const klinesStore = await getAllKlines();
     const btcKlinesStore = await store.get(KEYS.btcKlines, {});
     const previousSignals = await store.get(KEYS.signals, {});
 
@@ -930,7 +988,7 @@ async function renderTop30() {
 async function renderSignals() {
     const cfg = getConfig();
     const signals = await store.get(KEYS.signals, {});
-    const klinesStore = await store.get(KEYS.klines, {});
+    const klinesStore = await getAllKlines();
 
     const snapshots = await store.get(KEYS.snapshots, {});
     const dates = Object.keys(snapshots).sort();
@@ -1028,7 +1086,8 @@ async function renderSignals() {
 
 async function clearAll() {
     if (!confirm("Tüm kaydedilen veriler silinecek, sıfırdan başlayacaksın. Emin misin?")) return;
-    for (const k of Object.values(KEYS)) await store.delete(k);
+    for (const k of Object.values(KEYS)) await store.delete(k); // eski/olasi bozuk dev belgeyi de temizler
+    await deleteAllKlines(); // yeni coin-basina-belge koleksiyonunu temizle
     await renderTop30();
     await renderSignals();
     setStatus("🗑 Her şey sıfırlandı.", "ok");
@@ -1439,7 +1498,7 @@ async function openStatsPanel() {
     content.innerHTML = '<div class="modal-loading">⏳ İstatistikler hesaplanıyor...</div>';
 
     const signals = await store.get(KEYS.signals, {});
-    const klinesStore = await store.get(KEYS.klines, {});
+    const klinesStore = await getAllKlines();
     const stats = computeBacktestCore(signals, klinesStore);
     content.innerHTML = renderStatsHtml(stats);
 }
@@ -1560,7 +1619,7 @@ async function runOptimization() {
 
     try {
         const baseCfg = getConfig();
-        const klinesStore = await store.get(KEYS.klines, {});
+        const klinesStore = await getAllKlines();
         const btcKlinesStore = await store.get(KEYS.btcKlines, {});
         const btcMap = new Map(Object.entries(btcKlinesStore));
 
@@ -1679,7 +1738,7 @@ async function renderDatabaseList() {
     const content = document.getElementById("database-content");
     content.innerHTML = '<div class="modal-loading">⏳ Veritabanı yükleniyor...</div>';
 
-    const klinesStore = await store.get(KEYS.klines, {});
+    const klinesStore = await getAllKlines();
     const watchlist = await store.get(KEYS.watchlist, {});
     const signals = await store.get(KEYS.signals, {});
     const oiHistory = await store.get(KEYS.oiHistory, {});
@@ -1744,12 +1803,11 @@ async function renderCoinDetail(symbol) {
     const content = document.getElementById("database-content");
     content.innerHTML = '<div class="modal-loading">⏳ ' + symbol + ' geçmişi yükleniyor...</div>';
 
-    const klinesStore = await store.get(KEYS.klines, {});
+    const dateMap = await getSymbolKlines(symbol);
     const signals = await store.get(KEYS.signals, {});
     const oiHistory = await store.get(KEYS.oiHistory, {});
 
-    const dateMap = klinesStore[symbol];
-    if (!dateMap) {
+    if (!dateMap || !Object.keys(dateMap).length) {
         content.innerHTML = '<div class="empty-state">Bu coin için veri bulunamadı.</div>';
         return;
     }
