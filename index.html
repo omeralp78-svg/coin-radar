@@ -274,6 +274,7 @@
                 </div>
             </div>
             <div class="icon-actions">
+                <button class="icon-btn" onclick="openDatabasePage()">📚 Coin Veritabanı</button>
                 <button class="icon-btn" onclick="openOptimizerPanel()">🔬 Eşik Optimizasyonu</button>
                 <button class="icon-btn" onclick="openStatsPanel()">📊 Başarı Oranı</button>
                 <button class="icon-btn" onclick="recalcSignals()">↻ Yeniden hesapla</button>
@@ -400,6 +401,14 @@
     </div>
 </div>
 
+<!-- Coin Veritabani Sayfasi (tam listeli, gun gun detay) -->
+<div class="modal-overlay" id="database-overlay" onclick="if(event.target===this) closeDatabasePage()">
+    <div class="modal-box" style="max-width: 900px;">
+        <button class="modal-close" onclick="closeDatabasePage()">×</button>
+        <div id="database-content"></div>
+    </div>
+</div>
+
 <script>
 const API_BASE = "https://fapi.binance.com";
 const TOP_N = 30;
@@ -458,7 +467,8 @@ const KEYS = {
     watchlist: "pumpwatch_watchlist",
     signals: "pumpwatch_signals_v2",      // v2: saatlik + ATR + BTC alanlari icerir, eski formatla karismasin diye yeni anahtar
     config: "pumpwatch_config",           // esikler - GitHub Action otomasyonu da AYNI ayarlari kullansin diye paylasilir
-    notified: "pumpwatch_notified"        // Telegram'a daha once bildirilmis sinyaller (GitHub Action kullanir, tekrar mesaj atmasin diye)
+    notified: "pumpwatch_notified",       // Telegram'a daha once bildirilmis sinyaller (GitHub Action kullanir, tekrar mesaj atmasin diye)
+    oiHistory: "pumpwatch_oi_history"     // { symbol: { "YYYY-MM-DD": acikPozisyonUsd } } - gun gun OI gecmisi (Coin Veritabani sayfasi icin)
 };
 
 function todayStr() { return new Date().toISOString().slice(0, 10); }
@@ -712,6 +722,7 @@ async function runScan() {
 
         const symbols = Object.keys(watchlist);
         const klinesStore = await store.get(KEYS.klines, {});
+        const oiHistory = await store.get(KEYS.oiHistory, {});
         let done = 0;
         for (const symbol of symbols) {
             try {
@@ -721,11 +732,24 @@ async function runScan() {
                     klinesStore[symbol][k.date] = { open: k.open, high: k.high, low: k.low, close: k.close, volume: k.volume };
                 }
             } catch (e) { console.warn(e.message); }
+
+            // Gunluk OI (acik pozisyon) kaydi - Coin Veritabani sayfasinda gun gun gorebilmek icin
+            try {
+                const oiData = await safeFetchJson(`${API_BASE}/fapi/v1/openInterest?symbol=${symbol}`);
+                if (oiData) {
+                    const lastPrice = latestClose(klinesStore, symbol);
+                    const oiUsd = lastPrice ? parseFloat(oiData.openInterest) * lastPrice : parseFloat(oiData.openInterest);
+                    if (!oiHistory[symbol]) oiHistory[symbol] = {};
+                    oiHistory[symbol][today] = oiUsd;
+                }
+            } catch (e) { /* OI verisi olmayabilir, sorun degil */ }
+
             done++;
             setStatus(`⏳ Coin geçmişleri inceleniyor... (${done}/${symbols.length})`);
             await sleep(120);
         }
         await store.set(KEYS.klines, klinesStore);
+        await store.set(KEYS.oiHistory, oiHistory);
 
         await recalcSignals();
         setStatus(`✅ Tamamlandı. ${top30.length} coin kaydedildi, ${symbols.length} sembol saatlik veriyle analiz edildi.`, "ok");
@@ -1539,6 +1563,178 @@ function applyOptimizedConfig(pm, plm, rm) {
     recalcSignals();
     setStatus(`✅ Optimize edilmiş ayarlar uygulandı (Pump×${pm} / Pullback×${plm} / Reentry×${rm}) ve sinyaller yeniden hesaplandı.`, "ok");
 }
+
+// ================= COIN VERITABANI SAYFASI (tum taranan coinler, gun gun tam detay) =================
+
+function closeDatabasePage() { document.getElementById("database-overlay").classList.remove("open"); }
+
+/** Saatlik veriyi gunluk bara indirger - Coin Veritabani tablosu icin acilis/kapanis/hacim dahil tam versiyon. */
+function resampleToDailyFull(hourlyRows) {
+    const byDate = {};
+    for (const r of hourlyRows) {
+        const day = r.date.slice(0, 10);
+        if (!byDate[day]) byDate[day] = { date: day, open: r.open, high: r.high, low: r.low, close: r.close, volume: r.volume };
+        else {
+            byDate[day].high = Math.max(byDate[day].high, r.high);
+            byDate[day].low = Math.min(byDate[day].low, r.low);
+            byDate[day].close = r.close;
+            byDate[day].volume += r.volume;
+        }
+    }
+    return Object.values(byDate).sort((a, b) => a.date.localeCompare(b.date));
+}
+
+async function openDatabasePage() {
+    const overlay = document.getElementById("database-overlay");
+    overlay.classList.add("open");
+    await renderDatabaseList();
+}
+
+async function renderDatabaseList() {
+    const content = document.getElementById("database-content");
+    content.innerHTML = '<div class="modal-loading">⏳ Veritabanı yükleniyor...</div>';
+
+    const klinesStore = await store.get(KEYS.klines, {});
+    const watchlist = await store.get(KEYS.watchlist, {});
+    const signals = await store.get(KEYS.signals, {});
+    const oiHistory = await store.get(KEYS.oiHistory, {});
+
+    const allSymbols = new Set([...Object.keys(klinesStore), ...Object.keys(watchlist)]);
+
+    const rows = [];
+    for (const symbol of allSymbols) {
+        const dateMap = klinesStore[symbol];
+        if (!dateMap) continue;
+        const dates = Object.keys(dateMap).sort();
+        if (!dates.length) continue;
+        const daily = resampleToDailyFull(dates.map(d => ({ date: d, ...dateMap[d] })));
+        const daysTracked = new Set(dates.map(d => d.slice(0, 10))).size;
+        const lastDate = daily[daily.length - 1].date;
+        const lastClosePrice = daily[daily.length - 1].close;
+        const isActive = !!watchlist[symbol];
+
+        // Bu coin icin en son / en onemli sinyal durumu
+        const symbolSignals = Object.values(signals).filter(s => s.symbol === symbol);
+        let bestStatus = "—";
+        if (symbolSignals.some(s => s.status === "WATCHING")) bestStatus = "🟡 İZLENİYOR";
+        else if (symbolSignals.some(s => s.status === "CONFIRMED")) bestStatus = "🟢 DOĞRULANDI";
+        else if (symbolSignals.length) bestStatus = "⚪ Geçmiş (bitmiş)";
+
+        const oiDates = oiHistory[symbol] ? Object.keys(oiHistory[symbol]) : [];
+
+        rows.push({ symbol, daysTracked, lastDate, lastClosePrice, isActive, bestStatus, oiDayCount: oiDates.length, signalCount: symbolSignals.length });
+    }
+
+    rows.sort((a, b) => b.lastDate.localeCompare(a.lastDate) || a.symbol.localeCompare(b.symbol));
+
+    content.innerHTML = `
+        <div class="modal-title">📚 Coin Veritabanı</div>
+        <div class="modal-subtitle">Şimdiye kadar takip edilen tüm coinler — bir satıra tıklayınca gün gün tam detay açılır (fiyat, hacim, OI, hangi gün ne oldu).</div>
+        <div class="card" style="margin-top:14px;">
+            <table>
+                <thead><tr><th>Coin</th><th>Kaç Gün Veri Var</th><th>Son Görülme</th><th>Son Fiyat</th><th>Durum</th><th>Aktif mi</th></tr></thead>
+                <tbody>
+                    ${rows.length ? rows.map(r => `
+                        <tr onclick="renderCoinDetail('${r.symbol}')">
+                            <td data-label="Coin"><div class="sym">${r.symbol}</div></td>
+                            <td class="num" data-label="Kaç Gün">${r.daysTracked} gün</td>
+                            <td data-label="Son Görülme">${r.lastDate}</td>
+                            <td class="num" data-label="Son Fiyat">$${r.lastClosePrice}</td>
+                            <td data-label="Durum">${r.bestStatus}</td>
+                            <td data-label="Aktif mi">${r.isActive ? '🟢 Evet' : '⚪ Hayır (listeden düştü)'}</td>
+                        </tr>
+                    `).join('') : '<tr><td colspan="6"><div class="empty-state">Henüz veri yok.</div></td></tr>'}
+                </tbody>
+            </table>
+        </div>
+        <div class="modal-disclaimer">
+            Toplam ${rows.length} coin kayıtlı. Her coin, watchlist'e girdiği andan itibaren (en fazla ~20 günlük pencere)
+            saatlik olarak takip ediliyor. Bir coin 14 gün boyunca en çok artanlar listesine hiç girmezse
+            "Aktif" işareti kalkar ama geçmiş verisi silinmez, burada görünmeye devam eder.
+        </div>
+    `;
+}
+
+async function renderCoinDetail(symbol) {
+    const content = document.getElementById("database-content");
+    content.innerHTML = '<div class="modal-loading">⏳ ' + symbol + ' geçmişi yükleniyor...</div>';
+
+    const klinesStore = await store.get(KEYS.klines, {});
+    const signals = await store.get(KEYS.signals, {});
+    const oiHistory = await store.get(KEYS.oiHistory, {});
+
+    const dateMap = klinesStore[symbol];
+    if (!dateMap) {
+        content.innerHTML = '<div class="empty-state">Bu coin için veri bulunamadı.</div>';
+        return;
+    }
+    const dates = Object.keys(dateMap).sort();
+    const rows = dates.map(d => ({ date: d, ...dateMap[d] }));
+    const daily = resampleToDailyFull(rows);
+    const atrPct = computeATRPercent(rows, 14);
+
+    // Bu sembolun sinyallerinden gun bazinda "olay" etiketleri cikar
+    const eventsByDate = {};
+    for (const sig of Object.values(signals)) {
+        if (sig.symbol !== symbol) continue;
+        const pumpDay = sig.pumpTimestamp.slice(0, 10);
+        const pullbackDay = sig.pullbackTimestamp.slice(0, 10);
+        (eventsByDate[pumpDay] = eventsByDate[pumpDay] || []).push(`🔴 Patlama +${sig.pumpChangePct.toFixed(1)}%`);
+        (eventsByDate[pullbackDay] = eventsByDate[pullbackDay] || []).push(`🟡 Düşüş -${sig.pullbackPct.toFixed(1)}%`);
+        if (sig.reentryTimestamp) {
+            const reentryDay = sig.reentryTimestamp.slice(0, 10);
+            (eventsByDate[reentryDay] = eventsByDate[reentryDay] || []).push(`🟢 Tekrar Patlama +${sig.reentryPct.toFixed(1)}%`);
+        }
+    }
+
+    const oiMap = oiHistory[symbol] || {};
+    const currentPrice = daily.length ? daily[daily.length - 1].close : null;
+
+    // Gunluk degisim yuzdesini (onceki gunun kapanisina gore) hesapla
+    const dailyWithChange = daily.map((d, i) => {
+        const prevClose = i > 0 ? daily[i - 1].close : d.open;
+        const changePct = prevClose ? ((d.close - prevClose) / prevClose) * 100 : 0;
+        return { ...d, changePct };
+    });
+
+    content.innerHTML = `
+        <button class="icon-btn" onclick="renderDatabaseList()" style="margin-bottom:14px;">← Listeye Dön</button>
+        <div class="modal-title">${symbol}</div>
+        <div class="modal-subtitle">
+            Güncel fiyat: $${currentPrice} &nbsp;·&nbsp; ATR(14): ${atrPct != null ? atrPct.toFixed(2) + '%' : 'veri yok'} &nbsp;·&nbsp; ${daily.length} günlük kayıt
+        </div>
+        <div class="card" style="margin-top:10px; max-height:520px; overflow-y:auto;">
+            <table>
+                <thead>
+                    <tr><th>Tarih</th><th>Günlük Değişim</th><th>Yüksek</th><th>Düşük</th><th>Kapanış</th><th>Hacim</th><th>Açık Pozisyon (OI)</th><th>O Gün Ne Oldu</th></tr>
+                </thead>
+                <tbody>
+                    ${dailyWithChange.slice().reverse().map(d => {
+                        const events = eventsByDate[d.date];
+                        const oiVal = oiMap[d.date];
+                        return `
+                        <tr style="cursor:default;" onclick="event.stopPropagation();">
+                            <td data-label="Tarih"><strong>${d.date}</strong></td>
+                            <td class="${d.changePct >= 0 ? 'pos' : 'neg'}" data-label="Değişim">${d.changePct >= 0 ? '+' : ''}${d.changePct.toFixed(2)}%</td>
+                            <td class="num" data-label="Yüksek">$${d.high}</td>
+                            <td class="num" data-label="Düşük">$${d.low}</td>
+                            <td class="num" data-label="Kapanış">$${d.close}</td>
+                            <td class="num" data-label="Hacim">$${Math.round(d.volume).toLocaleString('tr-TR')}</td>
+                            <td class="num" data-label="OI">${oiVal != null ? '$' + Math.round(oiVal).toLocaleString('tr-TR') : '—'}</td>
+                            <td data-label="Olay">${events ? events.join('<br>') : ''}</td>
+                        </tr>
+                    `; }).join('')}
+                </tbody>
+            </table>
+        </div>
+        <div class="modal-disclaimer">
+            OI (açık pozisyon) sütunu, sadece bu özellik eklendikten sonraki günler için doludur — geçmişe
+            dönük OI verisi Binance tarafından sağlanmadığı için o tarihten öncesi boş görünür. Bu normaldir,
+            veri gün geçtikçe birikmeye devam edecek.
+        </div>
+    `;
+}
+
 
 // ================= BASLANGIC =================
 
