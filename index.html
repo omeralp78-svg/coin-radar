@@ -358,6 +358,7 @@
                 </div>
             </div>
             <div class="icon-actions">
+                <button class="icon-btn" onclick="openScalpPage()">⚡ Hızlı Fırsat Taraması</button>
                 <button class="icon-btn" onclick="exportAllData(this)">⬇ Dışa Aktar</button>
                 <button class="icon-btn" id="dip-nav-btn" onclick="openDipPage()" style="position:relative;">📉 Dip Toparlanma<span id="dip-badge" class="nav-badge" style="display:none;"></span></button>
                 <button class="icon-btn" onclick="openDatabasePage()">📚 Coin Veritabanı</button>
@@ -501,6 +502,14 @@
     <div class="modal-box">
         <button class="modal-close" onclick="closeOptimizerPanel()">×</button>
         <div id="optimizer-content"></div>
+    </div>
+</div>
+
+<!-- Hizli Firsat Taramasi (Scalping) - CANLI, saklanmiyor, her seferinde taze taranir -->
+<div class="modal-overlay" id="scalp-overlay" onclick="if(event.target===this) closeScalpPage()">
+    <div class="modal-box" style="max-width: 1200px; width: 95vw;">
+        <button class="modal-close" onclick="closeScalpPage()">×</button>
+        <div id="scalp-content"></div>
     </div>
 </div>
 
@@ -1963,6 +1972,359 @@ function applyOptimizedConfig(pm, plm, rm) {
     closeOptimizerPanel();
     recalcSignals();
     setStatus(`✅ Optimize edilmiş ayarlar uygulandı (Pump×${pm} / Pullback×${plm} / Reentry×${rm}) ve sinyaller yeniden hesaplandı.`, "ok");
+}
+
+// ================= HIZLI FIRSAT TARAMASI (Scalping) - canli, kisa vadeli, saklanmiyor =================
+// Bu modul ana sistemden TAMAMEN BAGIMSIZ calisir: veritabanina yazmaz, gecmis tutmaz.
+// Sebep: 1-15 dakikalik sinyaller birkac dakika icinde gecersiz kalir - bunlari Firestore'da
+// biriktirmenin (gunluk/saatlik sistemdeki gibi) hicbir analitik degeri olmaz, sadece
+// gereksiz yazma/okuma tuketir. Bu yuzden her acilista SIFIRDAN, CANLI olarak taranir.
+
+const SCALP_UNIVERSE_SIZE = 60; // en likit (hacimli) kac coin taransin
+const SCALP_INTERVALS = ["1m", "3m", "5m", "15m"];
+
+async function fetchScalpKlines(symbol, interval, limit) {
+    const url = `${API_BASE}/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`${symbol} ${interval} verisi alınamadı`);
+    const arr = await res.json();
+    return arr.map(k => ({
+        openTime: k[0], open: parseFloat(k[1]), high: parseFloat(k[2]),
+        low: parseFloat(k[3]), close: parseFloat(k[4]), volume: parseFloat(k[5])
+    }));
+}
+
+/** Klasik RSI(14) hesabi - kapanis fiyatlari dizisinden son noktanin RSI degerini dondurur. */
+function computeRSI(closes, period = 14) {
+    if (closes.length < period + 1) return null;
+    let gains = 0, losses = 0;
+    for (let i = closes.length - period; i < closes.length; i++) {
+        const diff = closes[i] - closes[i - 1];
+        if (diff >= 0) gains += diff; else losses -= diff;
+    }
+    const avgGain = gains / period, avgLoss = losses / period;
+    if (avgLoss === 0) return 100;
+    const rs = avgGain / avgLoss;
+    return 100 - (100 / (1 + rs));
+}
+
+/** Son N mumdaki % degisim (momentum). */
+function computeMomentum(closes, lookback = 5) {
+    if (closes.length < lookback + 1) return null;
+    const then = closes[closes.length - 1 - lookback];
+    const now = closes[closes.length - 1];
+    return then === 0 ? 0 : ((now - then) / then) * 100;
+}
+
+/** Son mumun hacmi, onceki N mumun ortalamasina gore kac kati (hacim patlamasi tespiti). */
+function computeVolumeRatio(volumes, lookback = 20) {
+    if (volumes.length < lookback + 1) return null;
+    const recent = volumes.slice(-1 - lookback, -1);
+    const avg = recent.reduce((a, b) => a + b, 0) / recent.length;
+    const last = volumes[volumes.length - 1];
+    return avg === 0 ? null : last / avg;
+}
+
+/** Bir zaman diliminin (interval) verisinden yon puani cikarir: +1 boga, -1 ayi, 0 notr/belirsiz. */
+function scoreTimeframe(klinesArr) {
+    const closes = klinesArr.map(k => k.close);
+    const volumes = klinesArr.map(k => k.volume);
+    const momentum = computeMomentum(closes, 5);
+    const rsi = computeRSI(closes, 14);
+    const volRatio = computeVolumeRatio(volumes, 20);
+
+    if (momentum == null || rsi == null || volRatio == null) return { score: 0, momentum, rsi, volRatio };
+
+    let score = 0;
+    const strongVolume = volRatio >= 1.5;
+    if (momentum >= 0.5 && rsi < 75 && strongVolume) score = 1;
+    else if (momentum <= -0.5 && rsi > 25 && strongVolume) score = -1;
+    return { score, momentum, rsi, volRatio };
+}
+
+function closeScalpPage() { document.getElementById("scalp-overlay").classList.remove("open"); }
+
+function openScalpPage() {
+    const overlay = document.getElementById("scalp-overlay");
+    overlay.classList.add("open");
+    document.getElementById("scalp-content").innerHTML = `
+        <div class="modal-title">⚡ Hızlı Fırsat Taraması (Scalping)</div>
+        <div class="modal-subtitle">
+            En likit ~${SCALP_UNIVERSE_SIZE} coini 1dk / 3dk / 5dk / 15dk grafiklerinde anlık olarak
+            tarar — momentum, RSI ve hacim patlamasına bakar. <strong>Bu sinyaller sadece birkaç
+            dakika için geçerlidir</strong>, kaydedilmez, her açılışta yeniden taranması gerekir.
+        </div>
+        <button id="run-scalp-btn" onclick="runScalpScan()" style="width:100%; padding:14px; background:var(--amber); color:#000; border:none; border-radius:10px; font-weight:800; cursor:pointer; margin-bottom:10px;">▶ Şimdi Tara (~1-2 dakika sürer)</button>
+        <button id="run-scalp-backtest-btn" onclick="runScalpBacktest()" style="width:100%; padding:12px; background:var(--bg-elev); color:var(--text); border:2px solid var(--border); border-radius:10px; font-weight:700; cursor:pointer; margin-bottom:16px;">🔬 Geçmişe Dönük Test (bu algoritma son ~16 saatte ne yapardı?)</button>
+        <div id="scalp-backtest-results"></div>
+        <div id="scalp-results"></div>
+        <div class="modal-disclaimer" style="margin-top:16px;">
+            Bu bir yatırım tavsiyesi değildir. Scalping (hızlı al-sat) yüksek risklidir, kaldıraçlı
+            işlemlerde hızla zarar da edebilirsin. Sinyaller sadece geçmiş fiyat/hacim davranışına
+            bakan basit bir kural setidir, garanti içermez.
+        </div>
+    `;
+}
+
+async function runScalpScan() {
+    const btn = document.getElementById("run-scalp-btn");
+    const resultsEl = document.getElementById("scalp-results");
+    btn.disabled = true;
+    btn.textContent = "⏳ Taranıyor...";
+    resultsEl.innerHTML = '<div class="modal-loading">⏳ En likit coinler belirleniyor...</div>';
+
+    try {
+        const tickers = await fetch24hrTickers();
+        tickers.sort((a, b) => b.volume - a.volume);
+        const universe = tickers.slice(0, SCALP_UNIVERSE_SIZE);
+
+        const results = [];
+        let done = 0;
+        for (const t of universe) {
+            done++;
+            resultsEl.innerHTML = `<div class="modal-loading">⏳ Taranıyor... (${done}/${universe.length}) — ${t.symbol}</div>`;
+            try {
+                const tfData = {};
+                for (const interval of SCALP_INTERVALS) {
+                    const klines = await fetchScalpKlines(t.symbol, interval, 50);
+                    tfData[interval] = scoreTimeframe(klines);
+                    if (interval === "15m") {
+                        // Hizli hedef/stop icin son 14 mumun ortalama araligini (basit ATR) hesapla
+                        const ranges = klines.slice(-14).map(k => k.high - k.low);
+                        tfData._avgRange15m = ranges.reduce((a, b) => a + b, 0) / ranges.length;
+                        tfData._lastPrice = klines[klines.length - 1].close;
+                    }
+                    await sleep(60);
+                }
+
+                const totalScore = SCALP_INTERVALS.reduce((sum, iv) => sum + tfData[iv].score, 0);
+                const agreeCount = SCALP_INTERVALS.filter(iv => tfData[iv].score === Math.sign(totalScore) && tfData[iv].score !== 0).length;
+
+                if (totalScore !== 0 && agreeCount >= 2) {
+                    const direction = totalScore > 0 ? "LONG" : "SHORT";
+                    const price = tfData._lastPrice;
+                    const range = tfData._avgRange15m;
+                    const target = direction === "LONG" ? price + range : price - range;
+                    const stop = direction === "LONG" ? price - range * 0.5 : price + range * 0.5;
+                    results.push({
+                        symbol: t.symbol, direction, agreeCount, price, target, stop, tfData
+                    });
+                }
+            } catch (e) { console.warn(t.symbol, "scalp hatasi:", e.message); }
+        }
+
+        results.sort((a, b) => b.agreeCount - a.agreeCount);
+        renderScalpResults(results);
+    } catch (e) {
+        console.error(e);
+        resultsEl.innerHTML = `<div class="verdict-box verdict-bearish">Hata: ${e.message}</div>`;
+    } finally {
+        btn.disabled = false;
+        btn.textContent = "▶ Şimdi Tara (~1-2 dakika sürer)";
+    }
+}
+
+/** 1 dakikalik mumlardan N dakikalik mumlar turetir (3dk/5dk/15dk icin) - ayri API cagrisi gerekmez. */
+function resampleMinuteKlines(oneMinKlines, groupSize) {
+    const result = [];
+    for (let i = 0; i + groupSize <= oneMinKlines.length; i += groupSize) {
+        const group = oneMinKlines.slice(i, i + groupSize);
+        result.push({
+            openTime: group[0].openTime,
+            open: group[0].open,
+            high: Math.max(...group.map(k => k.high)),
+            low: Math.min(...group.map(k => k.low)),
+            close: group[group.length - 1].close,
+            volume: group.reduce((s, k) => s + k.volume, 0)
+        });
+    }
+    return result;
+}
+
+/**
+ * GECMISE DONUK TEST: 1 dakikalik ham veriden 3/5/15 dakikalik mumlari kendi turetir,
+ * sonra zaman icinde ILERLEYEREK (gelecegi gormeden, sadece o ana kadarki veriyle) her
+ * noktada "bu an sinyal tetiklenir miydi" diye kontrol eder. Tetiklenirse, sonraki dakikalarda
+ * hedefe mi stop'a mi once ulastigina bakip KAZANDI/KAYBETTI olarak isaretler.
+ */
+async function runScalpBacktest() {
+    const btn = document.getElementById("run-scalp-backtest-btn");
+    const el = document.getElementById("scalp-backtest-results");
+    btn.disabled = true;
+    btn.textContent = "⏳ Test ediliyor...";
+    el.innerHTML = '<div class="modal-loading">⏳ En likit coinler belirleniyor...</div>';
+
+    try {
+        const tickers = await fetch24hrTickers();
+        tickers.sort((a, b) => b.volume - a.volume);
+        const testSymbols = tickers.slice(0, 10); // backtest'i hizli tutmak icin en likit 10 coin
+
+        let allTrades = [];
+        let done = 0;
+        for (const t of testSymbols) {
+            done++;
+            el.innerHTML = `<div class="modal-loading">⏳ Test ediliyor... (${done}/${testSymbols.length}) — ${t.symbol}</div>`;
+            try {
+                const oneMin = await fetchScalpKlines(t.symbol, "1m", 1000); // ~16.6 saat
+                const series = {
+                    "1m": oneMin,
+                    "3m": resampleMinuteKlines(oneMin, 3),
+                    "5m": resampleMinuteKlines(oneMin, 5),
+                    "15m": resampleMinuteKlines(oneMin, 15)
+                };
+
+                let i = 60; // ilk 60 dakika isinma (RSI/hacim ortalamasi icin yeterli veri birikene kadar)
+                while (i < oneMin.length - 20) { // sonuna en az 20 dk birakiyoruz - sonucu kontrol edebilmek icin
+                    const nowTime = oneMin[i].openTime;
+
+                    // Her zaman diliminde "su ana kadar tamamlanmis" mumlarla skor hesapla (gelecek gorulmuyor)
+                    const scores = {};
+                    let ready = true;
+                    for (const tf of SCALP_INTERVALS) {
+                        const bars = series[tf].filter(k => k.openTime <= nowTime);
+                        if (bars.length < 25) { ready = false; break; }
+                        scores[tf] = scoreTimeframe(bars);
+                    }
+                    if (!ready) { i++; continue; }
+
+                    const totalScore = SCALP_INTERVALS.reduce((s, tf) => s + scores[tf].score, 0);
+                    const agreeCount = SCALP_INTERVALS.filter(tf => scores[tf].score === Math.sign(totalScore) && scores[tf].score !== 0).length;
+
+                    if (totalScore !== 0 && agreeCount >= 2) {
+                        const direction = totalScore > 0 ? "LONG" : "SHORT";
+                        const entryPrice = oneMin[i].close;
+                        const bars15 = series["15m"].filter(k => k.openTime <= nowTime).slice(-14);
+                        const avgRange = bars15.reduce((s, k) => s + (k.high - k.low), 0) / bars15.length;
+                        const target = direction === "LONG" ? entryPrice + avgRange : entryPrice - avgRange;
+                        const stop = direction === "LONG" ? entryPrice - avgRange * 0.5 : entryPrice + avgRange * 0.5;
+
+                        // Sonraki dakikalarda hedefe mi stop'a mi once ulasiliyor bak (en fazla 20 dk ileri)
+                        let outcome = "SONUCLANMADI";
+                        let barsToOutcome = null;
+                        for (let j = i + 1; j <= i + 20 && j < oneMin.length; j++) {
+                            const bar = oneMin[j];
+                            if (direction === "LONG") {
+                                if (bar.low <= stop) { outcome = "KAYIP"; barsToOutcome = j - i; break; }
+                                if (bar.high >= target) { outcome = "KAZANC"; barsToOutcome = j - i; break; }
+                            } else {
+                                if (bar.high >= stop) { outcome = "KAYIP"; barsToOutcome = j - i; break; }
+                                if (bar.low <= target) { outcome = "KAZANC"; barsToOutcome = j - i; break; }
+                            }
+                        }
+
+                        allTrades.push({ symbol: t.symbol, direction, agreeCount, entryPrice, outcome, barsToOutcome, time: nowTime });
+                        i += 20; // ayni sinyali hemen tekrar tekrar saymamak icin ileri atla
+                    } else {
+                        i++;
+                    }
+                }
+            } catch (e) { console.warn(t.symbol, "backtest hatasi:", e.message); }
+        }
+
+        renderScalpBacktestResults(allTrades);
+    } catch (e) {
+        console.error(e);
+        el.innerHTML = `<div class="verdict-box verdict-bearish">Hata: ${e.message}</div>`;
+    } finally {
+        btn.disabled = false;
+        btn.textContent = "🔬 Geçmişe Dönük Test (bu algoritma son ~16 saatte ne yapardı?)";
+    }
+}
+
+function renderScalpBacktestResults(trades) {
+    const el = document.getElementById("scalp-backtest-results");
+    const resolved = trades.filter(t => t.outcome !== "SONUCLANMADI");
+    const wins = resolved.filter(t => t.outcome === "KAZANC").length;
+    const winRate = resolved.length ? (wins / resolved.length * 100) : null;
+    const avgBars = resolved.length ? (resolved.reduce((s, t) => s + t.barsToOutcome, 0) / resolved.length) : null;
+
+    if (!trades.length) {
+        el.innerHTML = `<div class="empty-state" style="padding:24px 0;">Test edilen ~16 saatlik pencerede hiç sinyal üretilmedi. Bu, eşiklerin şu anki piyasa için fazla katı olduğunu ya da o dönemin sakin geçtiğini gösterebilir.</div>`;
+        return;
+    }
+
+    el.innerHTML = `
+        <div class="modal-section-title">Son ~16 Saatte Bu Algoritma Ne Yapardı?</div>
+        <div class="metric-grid" style="grid-template-columns: repeat(3,1fr); margin-bottom:16px;">
+            <div class="metric-box">
+                <div class="metric-label">Üretilen Sinyal</div>
+                <div class="metric-value">${trades.length}</div>
+                <div class="metric-note">10 en likit coinde, ~16 saatte</div>
+            </div>
+            <div class="metric-box">
+                <div class="metric-label">Kazanma Oranı</div>
+                <div class="metric-value" style="color:${winRate==null?'var(--muted-dim)':winRate>=50?'var(--lime)':'var(--pink)'};">${winRate!=null?winRate.toFixed(0)+'%':'-'}</div>
+                <div class="metric-note">${resolved.length} sonuçlanan sinyalden ${wins} tanesi kazandı</div>
+            </div>
+            <div class="metric-box">
+                <div class="metric-label">Ortalama Sonuçlanma Süresi</div>
+                <div class="metric-value">${avgBars!=null?avgBars.toFixed(1)+' dk':'-'}</div>
+            </div>
+        </div>
+        <div class="card" style="max-height:400px; overflow-y:auto;">
+            <table>
+                <thead><tr><th>Coin</th><th>Yön</th><th>Uyum</th><th>Giriş</th><th>Sonuç</th><th>Süre</th></tr></thead>
+                <tbody>
+                    ${trades.slice().reverse().map(t => `
+                        <tr style="cursor:default;">
+                            <td data-label="Coin"><div class="sym">${t.symbol}</div></td>
+                            <td data-label="Yön">${t.direction}</td>
+                            <td class="num" data-label="Uyum">${t.agreeCount}/4</td>
+                            <td class="num" data-label="Giriş">$${t.entryPrice}</td>
+                            <td data-label="Sonuç"><span class="${t.outcome==='KAZANC'?'pos':t.outcome==='KAYIP'?'neg':''}">${t.outcome}</span></td>
+                            <td class="num" data-label="Süre">${t.barsToOutcome ? t.barsToOutcome + ' dk' : '-'}</td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        </div>
+        <div class="modal-disclaimer">
+            Bu test sadece son ~16 saatlik (Binance'in 1 dakikalık veride verdiği maksimum pencere)
+            veriyle yapılabiliyor — küçük bir örneklem, farklı saatlerde/günlerde çok farklı sonuç
+            çıkabilir. Gerçek performansı anlamak için bunu birkaç kez farklı zamanlarda tekrar
+            çalıştırıp tutarlılığa bakman önerilir.
+        </div>
+    `;
+}
+
+function renderScalpResults(results) {
+    const resultsEl = document.getElementById("scalp-results");
+    const now = new Date().toLocaleTimeString('tr-TR');
+
+    if (!results.length) {
+        resultsEl.innerHTML = `
+            <div class="empty-state" style="padding:30px 0;">
+                <span class="big-emoji">◎</span>Şu an net bir kısa vadeli fırsat bulunamadı (${now}).
+                Bu tamamen normal — piyasa her an "scalp'e uygun" olmak zorunda değil. Birkaç dakika
+                sonra tekrar taramayı dene.
+            </div>
+        `;
+        return;
+    }
+
+    resultsEl.innerHTML = `
+        <div class="section-desc" style="margin-bottom:10px;">Tarama saati: ${now} — bu sinyaller sadece birkaç dakika geçerlidir.</div>
+        <div class="card">
+            <table>
+                <thead><tr><th>Coin</th><th>Yön</th><th>Uyum</th><th>Fiyat</th><th>Hızlı Hedef</th><th>Stop</th></tr></thead>
+                <tbody>
+                    ${results.map(r => {
+                        const dirClass = r.direction === "LONG" ? "chip-confirmed" : "chip-hot";
+                        const dirColor = r.direction === "LONG" ? "pos" : "neg";
+                        return `
+                        <tr onclick="openCoinAnalysis('${r.symbol}')">
+                            <td data-label="Coin"><div class="sym">${r.symbol}</div></td>
+                            <td data-label="Yön"><span class="status-chip ${dirClass}"><span class="dot"></span>${r.direction}</span></td>
+                            <td data-label="Uyum" class="num">${r.agreeCount}/4 zaman dilimi</td>
+                            <td class="num" data-label="Fiyat">$${r.price}</td>
+                            <td class="${dirColor}" data-label="Hızlı Hedef">$${r.target.toFixed(6)}</td>
+                            <td class="neg" data-label="Stop">$${r.stop.toFixed(6)}</td>
+                        </tr>
+                    `;}).join('')}
+                </tbody>
+            </table>
+        </div>
+    `;
 }
 
 // ================= DIP TOPARLANMA SAYFASI (kucuk olcekli, tekrarlayan salinim sinyalleri) =================
