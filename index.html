@@ -1990,6 +1990,34 @@ function applyOptimizedConfig(pm, plm, rm) {
 // icerde) kurulur ve SADECE lehte yonde ilerler (trailing stop gibi). Bu cizginin yon
 // degistirdigi an AL/SAT sinyali dogar.
 const FOLLOWLINE_INTERVALS = ["1m", "3m", "5m"];
+const FOLLOWLINE_UNIVERSE_SIZE = 60; // en cok artmis + en cok dusmus olandan kac coin taransin
+
+// Binance Futures'ta artik kripto disi (tokenize hisse senedi / emtia) sozlesmeler de var
+// (orn. altin/gumus, ya da hisse senedi tabanli tokenlar). Kullanici bunlari istemiyor -
+// bilinen ornekleri disliyoruz. Yeni bir tane fark edilirse bu listeye eklenebilir.
+const NON_CRYPTO_SYMBOLS = new Set([
+    "XAUUSDT", "XAGUSDT", "XPTUSDT", "XPDUSDT", // degerli metaller
+    "SOXLUSDT", "SNDKUSDT", "SPCXUSDT", "SKHYNIXUSDT" // tokenize hisse senedi tabanli sozlesmeler
+]);
+
+function isCryptoSymbol(symbol) {
+    return !NON_CRYPTO_SYMBOLS.has(symbol);
+}
+
+/** En cok artmis VE en cok dusmus coinleri (ikisini de) birlestirip, hisse/emtia haric, secer. */
+function selectGainersAndLosers(tickers, size) {
+    const cryptoOnly = tickers.filter(t => isCryptoSymbol(t.symbol));
+    const sorted = cryptoOnly.slice().sort((a, b) => b.changePercent - a.changePercent);
+    const gainers = sorted.slice(0, Math.ceil(size / 2));
+    const losers = sorted.slice(-Math.floor(size / 2));
+    // Ayni sembol iki listede de olmasin diye Set ile tekillestir
+    const seen = new Set();
+    const combined = [];
+    for (const t of [...gainers, ...losers]) {
+        if (!seen.has(t.symbol)) { seen.add(t.symbol); combined.push(t); }
+    }
+    return combined;
+}
 const FL_BB_PERIOD = 21, FL_BB_DEV = 1.0, FL_ATR_PERIOD = 5, FL_USE_ATR = true;
 
 /** Wilder (RMA) yontemiyle ATR serisi - Pine'daki ta.atr() ile ayni sonucu verir. */
@@ -2074,9 +2102,10 @@ function openFollowLinePage() {
         <div class="modal-title">📈 Follow Line Sinyalleri</div>
         <div class="modal-subtitle">
             Bollinger Bandı + ATR ile hesaplanan bir trend-takip çizgisi (TradingView "Follow Line"
-            göstergesinin birebir uyarlaması). 1dk / 3dk / 5dk grafiklerinin her birinde ayrı ayrı
-            çalışır — <strong>hangi zaman diliminde, kaç mum önce</strong> AL/SAT sinyali verdiyse
-            onu gösterir. Bu, ana sistemden bağımsız, sadece canlı çalışan bir modüldür.
+            göstergesinin birebir uyarlaması). Sadece <strong>en çok artmış ve en çok düşmüş kripto
+            coinlerini</strong> tarar (tokenize hisse senedi/emtia sözleşmeleri hariç tutulur).
+            1dk / 3dk / 5dk grafiklerinin her birinde ayrı ayrı çalışır — <strong>hangi zaman
+            diliminde, kaç mum önce</strong> AL/SAT sinyali verdiyse onu gösterir.
         </div>
         <button id="run-followline-btn" onclick="runFollowLineScan()" style="width:100%; padding:14px; background:var(--amber); color:#000; border:none; border-radius:10px; font-weight:800; cursor:pointer; margin-bottom:16px;">▶ Şimdi Tara</button>
         <div id="followline-results"></div>
@@ -2092,14 +2121,13 @@ async function runFollowLineScan() {
     const el = document.getElementById("followline-results");
     btn.disabled = true;
     btn.textContent = "⏳ Taranıyor...";
-    el.innerHTML = '<div class="modal-loading">⏳ En likit coinler belirleniyor...</div>';
+    el.innerHTML = '<div class="modal-loading">⏳ En çok artan/düşen coinler belirleniyor...</div>';
 
     const RECENT_BARS = 5; // son kac mum icindeki sinyalleri "guncel" sayalim
 
     try {
         const tickers = await fetch24hrTickers();
-        tickers.sort((a, b) => b.volume - a.volume);
-        const universe = tickers.slice(0, SCALP_UNIVERSE_SIZE);
+        const universe = selectGainersAndLosers(tickers, FOLLOWLINE_UNIVERSE_SIZE);
 
         const findings = [];
         let done = 0;
@@ -2117,7 +2145,8 @@ async function runFollowLineScan() {
                         if (bar.buy || bar.sell) {
                             findings.push({
                                 symbol: t.symbol, interval, barsAgo,
-                                direction: bar.buy ? "AL" : "SAT", price: bar.close, time: bar.time
+                                direction: bar.buy ? "AL" : "SAT", price: bar.close, time: bar.time,
+                                dailyChangePercent: t.changePercent
                             });
                             break; // bu zaman dilimi icin en yeni sinyali bulduk, sonraki interval'a gec
                         }
@@ -2156,7 +2185,7 @@ function renderFollowLineResults(findings) {
         <div class="section-desc" style="margin-bottom:10px;">Tarama saati: ${now}</div>
         <div class="card">
             <table>
-                <thead><tr><th>Coin</th><th>Zaman Dilimi</th><th>Yön</th><th>Kaç Mum Önce</th><th>Fiyat</th></tr></thead>
+                <thead><tr><th>Coin</th><th>24s Değişim</th><th>Zaman Dilimi</th><th>Yön</th><th>Kaç Mum Önce</th><th>Fiyat</th></tr></thead>
                 <tbody>
                     ${findings.map(f => {
                         const dirClass = f.direction === "AL" ? "chip-confirmed" : "chip-hot";
@@ -2164,6 +2193,7 @@ function renderFollowLineResults(findings) {
                         return `
                         <tr onclick="openCoinAnalysis('${f.symbol}')">
                             <td data-label="Coin"><div class="sym">${f.symbol}</div></td>
+                            <td class="${f.dailyChangePercent>=0?'pos':'neg'}" data-label="24s Değişim">${f.dailyChangePercent>=0?'+':''}${f.dailyChangePercent.toFixed(1)}%</td>
                             <td data-label="Zaman Dilimi" class="num">${f.interval}</td>
                             <td data-label="Yön"><span class="status-chip ${dirClass}"><span class="dot"></span>${f.direction}</span></td>
                             <td data-label="Kaç Mum Önce">${barsLabel}</td>
