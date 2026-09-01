@@ -358,7 +358,7 @@
                 </div>
             </div>
             <div class="icon-actions">
-                <button class="icon-btn" onclick="openFollowLinePage()">📈 Follow Line Sinyalleri</button>
+                <button class="icon-btn" onclick="openFollowLineInNewTab()">📈 Follow Line Sinyalleri ↗</button>
                 <button class="icon-btn" onclick="openScalpPage()">⚡ Hızlı Fırsat Taraması</button>
                 <button class="icon-btn" onclick="exportAllData(this)">⬇ Dışa Aktar</button>
                 <button class="icon-btn" id="dip-nav-btn" onclick="openDipPage()" style="position:relative;">📉 Dip Toparlanma<span id="dip-badge" class="nav-badge" style="display:none;"></span></button>
@@ -2194,6 +2194,15 @@ function computeSqueezeMomentum(klines, bbLength = 20, bbMult = 2.0, kcLength = 
 
 function closeFollowLinePage() { document.getElementById("followline-overlay").classList.remove("open"); }
 
+/** "Follow Line Sinyalleri"ni AYRI bir tarayici sekmesinde acar - ayni sayfanin
+ * tamamini (kod tekrari olmadan) yeniden yukler, sadece #followline isareti sayesinde
+ * o sekme acilir acilmaz otomatik olarak bu sayfayi gosterir. Boylece ana panel
+ * (bu sekme) ile Follow Line taramasi (yeni sekme) birbirini bloklamadan yan yana durur. */
+function openFollowLineInNewTab() {
+    const url = window.location.origin + window.location.pathname + "#followline";
+    window.open(url, "_blank");
+}
+
 function openFollowLinePage() {
     const overlay = document.getElementById("followline-overlay");
     overlay.classList.add("open");
@@ -3144,6 +3153,14 @@ async function renderCoinDetail(symbol) {
 renderTop30();
 renderSignals();
 updateDipBadge();
+
+// URL'de #followline varsa (yeni sekmede acildiysa), bu sayfayi otomatik ac ve taramayi baslat
+if (window.location.hash === "#followline") {
+    setTimeout(() => {
+        openFollowLinePage();
+        setTimeout(() => runFollowLineScan(), 200);
+    }, 300);
+}
 
 // Firestore'da kayitli ayarlar varsa (GitHub Action ya da baska bir cihazdan kaydedilmis olabilir)
 // sayfa acilirken input alanlarina yukle - boylece iki sistem hep ayni esikleri kullanir.
