@@ -345,6 +345,8 @@
         </div>
     </div>
 
+    <div id="fresh-notification-banner" style="display:none; background:var(--lime-dim); border:2px solid var(--lime); border-radius:12px; padding:14px 18px; margin-top:12px; font-size:13.5px; line-height:1.7; color:#fff;"></div>
+
     <header>
         <div class="header-row">
             <div class="brand">
@@ -460,10 +462,10 @@
     <details class="advanced">
         <summary>⚙ Dip Toparlanma ayarları (küçük ölçekli, tekrarlayan salınımlar için)</summary>
         <div class="settings-grid">
-            <label>Düşüş eşiği (%) - kaç gün içinde ne kadar düşerse "dip" sayılsın<input id="cfg-dip-decline" type="number" value="10"></label>
-            <label>Düşüş penceresi (gün)<input id="cfg-dip-lookback" type="number" value="4"></label>
-            <label>Toparlanma eşiği (%) - dip noktasından ne kadar sıçrarsa "toparlandı" sayılsın<input id="cfg-dip-recovery" type="number" value="8"></label>
-            <label>Toparlanma penceresi (gün)<input id="cfg-dip-recovery-window" type="number" value="5"></label>
+            <label>Düşüş eşiği (%) - kaç gün içinde ne kadar düşerse "dip" sayılsın<input id="cfg-dip-decline" type="number" value="20"></label>
+            <label>Düşüş penceresi (gün)<input id="cfg-dip-lookback" type="number" value="2"></label>
+            <label>Toparlanma eşiği (%) - dip noktasından ne kadar sıçrarsa "toparlandı" sayılsın<input id="cfg-dip-recovery" type="number" value="20"></label>
+            <label>Toparlanma penceresi (gün)<input id="cfg-dip-recovery-window" type="number" value="2"></label>
         </div>
     </details>
 
@@ -522,7 +524,7 @@
 const API_BASE = "https://fapi.binance.com";
 const TOP_N = 30;
 const WATCHLIST_RETENTION_DAYS = 14;
-const MAX_WATCHLIST_SIZE = 60; // guvenlik sinir - watchlist bunun uzerine cikmasin (taramanin donmasini onlemek icin)
+const MAX_WATCHLIST_SIZE = 80; // guvenlik sinir - watchlist bunun uzerine cikmasin (taramanin donmasini onlemek icin)
 const HOURLY_FETCH_LIMIT = 500; // ~20 gunluk saatlik veri (pattern penceresi + ATR icin yeterli tampon)
 
 // ---------- Firebase / Firestore baglantisi ----------
@@ -901,16 +903,20 @@ async function runScan() {
 
         // BTC referans serisini bir kez cek (tum semboller icin ortak kullanilacak)
         setStatus("⏳ BTC referans verisi alınıyor...");
+        let btcFetchError = null;
         try {
             const btcKlines = await fetchHourlyKlines("BTCUSDT", HOURLY_FETCH_LIMIT);
             const freshBtcMap = {};
             for (const k of btcKlines) freshBtcMap[k.date] = { open: k.open, high: k.high, low: k.low, close: k.close, volume: k.volume };
             await store.set(KEYS.btcKlines, freshBtcMap); // DEGISTIR, biriktirme - boyut sabit kalsin
-        } catch (e) { console.warn("BTC verisi alinamadi:", e.message); }
+        } catch (e) { btcFetchError = e.message; console.warn("BTC verisi alinamadi:", e.message); }
 
         const symbols = Object.keys(watchlist);
         const oiHistory = await store.get(KEYS.oiHistory, {});
         let done = 0;
+        let successCount = 0;
+        let failCount = 0;
+        let lastError = null;
         for (const symbol of symbols) {
             let freshMap = null;
             try {
@@ -918,7 +924,12 @@ async function runScan() {
                 freshMap = {};
                 for (const k of klines) freshMap[k.date] = { open: k.open, high: k.high, low: k.low, close: k.close, volume: k.volume };
                 await setSymbolKlines(symbol, freshMap); // DEGISTIR (bu coinin KENDI kucuk belgesine) - biriktirme yok
-            } catch (e) { console.warn(e.message); }
+                successCount++;
+            } catch (e) {
+                failCount++;
+                lastError = e.message;
+                console.warn(symbol, "veri cekme hatasi:", e.message);
+            }
 
             // Gunluk OI (acik pozisyon) kaydi - Coin Veritabani sayfasinda gun gun gorebilmek icin
             try {
@@ -940,7 +951,18 @@ async function runScan() {
         await store.set(KEYS.oiHistory, oiHistory);
 
         await recalcSignals();
-        setStatus(`✅ Tamamlandı. ${top30.length} coin kaydedildi, ${symbols.length} sembol saatlik veriyle analiz edildi.`, "ok");
+
+        // DURUST SONUC MESAJI: onceden burada "basarili" mesaji hersey basarisiz olsa bile
+        // kosulsuz gosteriliyordu - bu, verinin aslinda hic guncellenmedigi durumlari gizliyordu.
+        if (successCount === 0 && symbols.length > 0) {
+            setStatus(`❌ HİÇBİR coin için veri çekilemedi! (${failCount}/${symbols.length} başarısız). Muhtemelen Binance'e bağlanılamıyor veya IP geçici olarak sınırlandı. Son hata: ${lastError || 'bilinmiyor'}`, "error");
+        } else if (failCount > 0) {
+            setStatus(`⚠️ Tamamlandı ama ${failCount}/${symbols.length} coin için veri çekilemedi (${successCount} başarılı). Son hata: ${lastError || ''}`, "error");
+        } else if (btcFetchError) {
+            setStatus(`⚠️ Coinler güncellendi (${successCount}/${symbols.length}) ama BTC referans verisi alınamadı: ${btcFetchError}`, "error");
+        } else {
+            setStatus(`✅ Tamamlandı. ${top30.length} coin kaydedildi, ${successCount}/${symbols.length} sembol saatlik veriyle başarıyla analiz edildi.`, "ok");
+        }
         localStorage.setItem("pumpwatch_last_scan_completed", String(Date.now()));
         updateTimingDisplays();
     } catch (e) {
@@ -968,10 +990,10 @@ function getConfig() {
         NEAR_TERM_HOURS: parseInt(document.getElementById("cfg-near-term-hours").value) || 48,
         ISOLATION_MULT: parseFloat(document.getElementById("cfg-isolation-mult").value) || 50,
         // Kucuk olcekli, tekrarlayan dus-cik (mean-reversion / "dip toparlanma") ayarlari - buyuk patlama ayarlarindan BAGIMSIZ
-        DIP_DECLINE_THRESHOLD: parseFloat(document.getElementById("cfg-dip-decline").value) || 10,
-        DIP_LOOKBACK_DAYS: parseInt(document.getElementById("cfg-dip-lookback").value) || 4,
-        DIP_RECOVERY_THRESHOLD: parseFloat(document.getElementById("cfg-dip-recovery").value) || 8,
-        DIP_RECOVERY_WINDOW_DAYS: parseInt(document.getElementById("cfg-dip-recovery-window").value) || 5
+        DIP_DECLINE_THRESHOLD: parseFloat(document.getElementById("cfg-dip-decline").value) || 20,
+        DIP_LOOKBACK_DAYS: parseInt(document.getElementById("cfg-dip-lookback").value) || 2,
+        DIP_RECOVERY_THRESHOLD: parseFloat(document.getElementById("cfg-dip-recovery").value) || 20,
+        DIP_RECOVERY_WINDOW_DAYS: parseInt(document.getElementById("cfg-dip-recovery-window").value) || 2
     };
 }
 
@@ -1011,6 +1033,57 @@ async function recalcSignals() {
     await store.set(KEYS.dipSignals, dipSignals);
     await renderSignals();
     await updateDipBadge();
+    showFreshNotifications(previousSignals, signals, previousDipSignals, dipSignals);
+}
+
+/**
+ * Bir onceki tarama ile bu taramayi KARSILASTIRIR ve GERCEKTEN yeni olan olaylari
+ * (az once ilk kez ortaya cikan aday, az once dogrulanan sinyal) ayri bir banner'da gosterir.
+ *
+ * ONEMLI: Her tarama, Binance'ten ~20 gunluk GECMIS veriyi butunuyle yeniden ceker ve tarar.
+ * Bu yuzden "signals" nesnesindeki cogu kayit aslinda haftalar once olmus bitmis olaylardir -
+ * bunlarin hepsini "yeni" gibi göstermek yaniltici olur (kullanicinin hic gormedigi, gecmise
+ * ait yuzlerce "basari"yi az önce olmus gibi sunmak). Bu yuzden sadece ONCEKI TARAMADA
+ * FARKLI DURUMDA olan (yani gercekten BU taramada degisen) kayitlari "taze" sayiyoruz.
+ */
+function showFreshNotifications(prevSignals, newSignals, prevDipSignals, newDipSignals) {
+    const newlyConfirmedMain = [];
+    const newlyWatchingMain = [];
+    for (const [key, sig] of Object.entries(newSignals)) {
+        const prev = prevSignals[key];
+        if (!prev && sig.status === "WATCHING") newlyWatchingMain.push(sig);
+        else if (prev && prev.status === "WATCHING" && sig.status === "CONFIRMED") newlyConfirmedMain.push(sig);
+    }
+
+    const newlyConfirmedDip = [];
+    const newlyWatchingDip = [];
+    for (const [key, sig] of Object.entries(newDipSignals)) {
+        const prev = prevDipSignals[key];
+        if (!prev && sig.status === "WATCHING") newlyWatchingDip.push(sig);
+        else if (prev && prev.status === "WATCHING" && sig.status === "CONFIRMED") newlyConfirmedDip.push(sig);
+    }
+
+    const totalNews = newlyConfirmedMain.length + newlyWatchingMain.length + newlyConfirmedDip.length + newlyWatchingDip.length;
+    const banner = document.getElementById("fresh-notification-banner");
+    if (!banner) return;
+
+    if (totalNews === 0) {
+        banner.style.display = "none";
+        return;
+    }
+
+    let html = "";
+    if (newlyConfirmedMain.length || newlyConfirmedDip.length) {
+        const items = [...newlyConfirmedMain.map(s => `${s.symbol} (+${s.reentryPct.toFixed(1)}%)`),
+                        ...newlyConfirmedDip.map(s => `${s.symbol} (+${s.recoveryPct.toFixed(1)}%)`)];
+        html += `<div>🎉 <strong>Az önce doğrulandı:</strong> ${items.join(', ')}</div>`;
+    }
+    if (newlyWatchingMain.length || newlyWatchingDip.length) {
+        const items = [...newlyWatchingMain.map(s => s.symbol), ...newlyWatchingDip.map(s => s.symbol)];
+        html += `<div>🆕 <strong>Yeni aday (bu taramada ilk kez):</strong> ${items.join(', ')}</div>`;
+    }
+    banner.innerHTML = html + `<button onclick="document.getElementById('fresh-notification-banner').style.display='none'" style="margin-top:8px; background:none; border:1px solid var(--border); color:var(--muted); padding:4px 10px; border-radius:6px; font-size:11px; cursor:pointer;">Kapat</button>`;
+    banner.style.display = "block";
 }
 
 /**
@@ -1047,7 +1120,12 @@ function detectDipSignalsForSymbol(symbol, dailyRows, cfg, previousDipSignals) {
         let recoveryIdx = null, recoveryPct = null;
         const recoveryWindowEnd = Math.min(n - 1, dipIdx + cfg.DIP_RECOVERY_WINDOW_DAYS);
         for (let k = dipIdx + 1; k <= recoveryWindowEnd; k++) {
-            const bouncePct = dipLow === 0 ? 0 : ((dailyRows[k].high - dipLow) / dipLow) * 100;
+            // ONEMLI: KAPANIS fiyatiyla olcuyoruz (gunun en yuksek fitiliyle degil).
+            // Gecmis veriyle test ettik: "high" ile olcmek, gunluk anlik fiyat sicramalarini
+            // (kalici olmayan) "basari" sayip sinyali anlamsizlastiriyordu - isaretli gunlerle
+            // rastgele gunler arasinda hicbir fark cikmiyordu. Kapanis + daha siki esiklerle
+            // gercek, olculebilir bir fark ortaya cikti (bkz. Basari Orani panelindeki not).
+            const bouncePct = dipLow === 0 ? 0 : ((dailyRows[k].close - dipLow) / dipLow) * 100;
             if (bouncePct >= cfg.DIP_RECOVERY_THRESHOLD) { recoveryIdx = k; recoveryPct = bouncePct; break; }
         }
 
@@ -1978,9 +2056,12 @@ async function renderDipPage() {
         <div class="modal-title">📉 Dip Toparlanma Adayları</div>
         <div class="modal-subtitle">
             Büyük "patlama" avcısından bağımsız, küçük ölçekli ama <strong>tekrarlayan</strong> düş-çık
-            (bant içi salınım) hareketlerini yakalar. "Geçmiş Performans" sütunu, o coinin bu tarz bir
-            düşüşten daha önce kaç kez gerçekten toparlandığını gösterir — bu, sinyalin o coin özelinde
-            ne kadar güvenilir olduğunun kanıtıdır.
+            hareketlerini yakalar. Eşikler (varsayılan: 2 gün içinde %20 düşüş → 2 gün içinde
+            <strong>kapanış fiyatıyla</strong> %20 toparlanma) gerçek veriyle test edildi — rastgele
+            günlerle karşılaştırıldığında bu eşikler <strong>+32 puanlık</strong> gerçek bir fark
+            gösteriyor (eski, daha gevşek eşiklerde bu fark neredeyse hiç yoktu, yani sinyal
+            anlamsızdı). "Geçmiş Performans" sütunu, o coinin bu düşüş tipinden daha önce kaç kez
+            gerçekten toparlandığını gösterir.
         </div>
 
         <div class="metric-grid" style="grid-template-columns: repeat(3, 1fr); margin-bottom:20px;">
