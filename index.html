@@ -2093,6 +2093,105 @@ function computeFollowLineSeries(klines, bbPeriod = FL_BB_PERIOD, bbDev = FL_BB_
     return bars;
 }
 
+/**
+ * Squeeze Momentum Indicator [LazyBear] - TradingView'in en bilinen gostergelerinden birinin
+ * BIREBIR JS uyarlamasi. Bollinger Bandi (BB) ile Keltner Kanali'ni (KC, True Range bazli)
+ * karsilastirip "sikisma" (BB, KC'nin icinde) ve "sikisma patladi" (BB, KC'nin disina cikti)
+ * anlarini yakalar. "val" (linreg momentum) pozitifse boga, negatifse ayi yonu.
+ */
+function computeSqueezeMomentum(klines, bbLength = 20, bbMult = 2.0, kcLength = 20, kcMult = 1.5, useTrueRange = true) {
+    const n = klines.length;
+    const closes = klines.map(k => k.close);
+    const highs = klines.map(k => k.high);
+    const lows = klines.map(k => k.low);
+
+    function sma(arr, period, idx) {
+        if (idx < period - 1) return null;
+        let sum = 0; for (let i = idx - period + 1; i <= idx; i++) sum += arr[i];
+        return sum / period;
+    }
+    function stdevAt(arr, period, idx, mean) {
+        if (idx < period - 1) return null;
+        let sum = 0; for (let i = idx - period + 1; i <= idx; i++) sum += Math.pow(arr[i] - mean, 2);
+        return Math.sqrt(sum / period);
+    }
+    function highestAt(arr, period, idx) {
+        if (idx < period - 1) return null;
+        let m = -Infinity; for (let i = idx - period + 1; i <= idx; i++) m = Math.max(m, arr[i]);
+        return m;
+    }
+    function lowestAt(arr, period, idx) {
+        if (idx < period - 1) return null;
+        let m = Infinity; for (let i = idx - period + 1; i <= idx; i++) m = Math.min(m, arr[i]);
+        return m;
+    }
+
+    const trSeries = klines.map((k, i) => i === 0 ? k.high - k.low : Math.max(
+        k.high - k.low, Math.abs(k.high - closes[i - 1]), Math.abs(k.low - closes[i - 1])
+    ));
+    const hlRangeSeries = klines.map(k => k.high - k.low);
+    const rangeSourceSeries = useTrueRange ? trSeries : hlRangeSeries;
+
+    const valInputs = new Array(n).fill(null);
+    const results = [];
+
+    for (let i = 0; i < n; i++) {
+        const basis = sma(closes, bbLength, i);
+        const sd = basis != null ? stdevAt(closes, bbLength, i, basis) : null;
+        const upperBB = basis != null && sd != null ? basis + bbMult * sd : null;
+        const lowerBB = basis != null && sd != null ? basis - bbMult * sd : null;
+
+        const ma = sma(closes, kcLength, i);
+        const rangema = sma(rangeSourceSeries, kcLength, i);
+        const upperKC = ma != null && rangema != null ? ma + rangema * kcMult : null;
+        const lowerKC = ma != null && rangema != null ? ma - rangema * kcMult : null;
+
+        let sqzOn = false, sqzOff = false, noSqz = false;
+        if (lowerBB != null && lowerKC != null && upperBB != null && upperKC != null) {
+            sqzOn = (lowerBB > lowerKC) && (upperBB < upperKC);
+            sqzOff = (lowerBB < lowerKC) && (upperBB > upperKC);
+            noSqz = !sqzOn && !sqzOff;
+        }
+
+        const hh = highestAt(highs, kcLength, i);
+        const ll = lowestAt(lows, kcLength, i);
+        const smaClose = sma(closes, kcLength, i);
+        let valInput = null;
+        if (hh != null && ll != null && smaClose != null) {
+            valInput = closes[i] - ((hh + ll) / 2 + smaClose) / 2;
+        }
+        valInputs[i] = valInput;
+
+        results.push({ index: i, sqzOn, sqzOff, noSqz, valInput, val: null });
+    }
+
+    // linreg(valInput, kcLength, 0) - son kcLength noktaya dogru cizgi uydurup son noktadaki degeri al
+    for (let i = 0; i < n; i++) {
+        if (i < kcLength - 1) continue;
+        const ys = [];
+        let ok = true;
+        for (let j = i - kcLength + 1; j <= i; j++) {
+            if (valInputs[j] == null) { ok = false; break; }
+            ys.push(valInputs[j]);
+        }
+        if (!ok) continue;
+        const xs = ys.map((_, idx) => idx);
+        const nPts = xs.length;
+        const sumX = xs.reduce((a, b) => a + b, 0);
+        const sumY = ys.reduce((a, b) => a + b, 0);
+        const sumXY = xs.reduce((s, x, idx) => s + x * ys[idx], 0);
+        const sumX2 = xs.reduce((s, x) => s + x * x, 0);
+        const denom = (nPts * sumX2 - sumX * sumX);
+        const slope = denom === 0 ? 0 : (nPts * sumXY - sumX * sumY) / denom;
+        const intercept = (sumY - slope * sumX) / nPts;
+        results[i].val = intercept + slope * (nPts - 1);
+    }
+
+    return results;
+}
+
+
+
 function closeFollowLinePage() { document.getElementById("followline-overlay").classList.remove("open"); }
 
 function openFollowLinePage() {
@@ -2129,35 +2228,69 @@ async function runFollowLineScan() {
         const tickers = await fetch24hrTickers();
         const universe = selectGainersAndLosers(tickers, FOLLOWLINE_UNIVERSE_SIZE);
 
-        const findings = [];
+        const rows = []; // her coin icin TEK satir, icinde 3 zaman diliminin sonucu
         let done = 0;
         for (const t of universe) {
             done++;
             el.innerHTML = `<div class="modal-loading">⏳ Taranıyor... (${done}/${universe.length}) — ${t.symbol}</div>`;
+            const byInterval = {};
+            let anySignal = false;
+
             for (const interval of FOLLOWLINE_INTERVALS) {
+                byInterval[interval] = null;
                 try {
                     const klines = await fetchScalpKlines(t.symbol, interval, 100);
                     const series = computeFollowLineSeries(klines);
-                    // Son RECENT_BARS mum icinde (en yeniden en eskiye) ilk bulunan sinyali al
+                    const sqzSeries = computeSqueezeMomentum(klines);
+                    const volumes = klines.map(k => k.volume);
+
                     for (let barsAgo = 1; barsAgo <= RECENT_BARS; barsAgo++) {
-                        const bar = series[series.length - barsAgo];
+                        const idx = series.length - barsAgo;
+                        const bar = series[idx];
                         if (!bar) break;
                         if (bar.buy || bar.sell) {
-                            findings.push({
-                                symbol: t.symbol, interval, barsAgo,
-                                direction: bar.buy ? "AL" : "SAT", price: bar.close, time: bar.time,
-                                dailyChangePercent: t.changePercent
-                            });
-                            break; // bu zaman dilimi icin en yeni sinyali bulduk, sonraki interval'a gec
+                            // HACIM TEYIDI: bu sinyal barinda gercekten hacim patlamasi var miydi?
+                            const volAtSignal = computeVolumeRatio(volumes.slice(0, idx + 1), 20);
+                            const volumeConfirmed = volAtSignal != null && volAtSignal >= 1.5;
+
+                            // SQUEEZE MOMENTUM TEYIDI: sinyal barinin etrafinda (son birkac mumda)
+                            // sikisma yeni PATLAMIS mi (sqzOff yeni basladi) ve yon ayni mi?
+                            const direction = bar.buy ? "AL" : "SAT";
+                            let squeezeConfirmed = false;
+                            for (let k = Math.max(1, idx - 2); k <= idx; k++) {
+                                const sqzBar = sqzSeries[k];
+                                const sqzPrevBar = sqzSeries[k - 1];
+                                if (!sqzBar || !sqzPrevBar) continue;
+                                const justFired = sqzPrevBar.sqzOn && sqzBar.sqzOff;
+                                const momentumMatches = (direction === "AL" && sqzBar.val > 0) || (direction === "SAT" && sqzBar.val < 0);
+                                if (justFired && momentumMatches) { squeezeConfirmed = true; break; }
+                            }
+
+                            byInterval[interval] = {
+                                barsAgo, direction, price: bar.close, volumeConfirmed, squeezeConfirmed
+                            };
+                            anySignal = true;
+                            break;
                         }
                     }
                 } catch (e) { console.warn(t.symbol, interval, "hata:", e.message); }
                 await sleep(50);
             }
+
+            if (anySignal) {
+                // UYUM SKORU: kac zaman dilimi AYNI yonde sinyal veriyor?
+                const directions = FOLLOWLINE_INTERVALS.map(iv => byInterval[iv] ? byInterval[iv].direction : null).filter(Boolean);
+                const alCount = directions.filter(d => d === "AL").length;
+                const satCount = directions.filter(d => d === "SAT").length;
+                const confluence = Math.max(alCount, satCount);
+                const confluenceDirection = alCount >= satCount ? "AL" : "SAT";
+
+                rows.push({ symbol: t.symbol, dailyChangePercent: t.changePercent, byInterval, confluence, confluenceDirection });
+            }
         }
 
-        findings.sort((a, b) => a.barsAgo - b.barsAgo);
-        renderFollowLineResults(findings);
+        rows.sort((a, b) => b.confluence - a.confluence);
+        renderFollowLineResults(rows);
     } catch (e) {
         console.error(e);
         el.innerHTML = `<div class="verdict-box verdict-bearish">Hata: ${e.message}</div>`;
@@ -2167,11 +2300,11 @@ async function runFollowLineScan() {
     }
 }
 
-function renderFollowLineResults(findings) {
+function renderFollowLineResults(rows) {
     const el = document.getElementById("followline-results");
     const now = new Date().toLocaleTimeString('tr-TR');
 
-    if (!findings.length) {
+    if (!rows.length) {
         el.innerHTML = `
             <div class="empty-state" style="padding:30px 0;">
                 <span class="big-emoji">◎</span>Şu an yakın zamanda (son 5 mum içinde) sinyal veren
@@ -2181,23 +2314,35 @@ function renderFollowLineResults(findings) {
         return;
     }
 
+    function cellHtml(entry) {
+        if (!entry) return '<span class="num" style="color:var(--muted-dim);">—</span>';
+        const dirClass = entry.direction === "AL" ? "pos" : "neg";
+        const barsLabel = entry.barsAgo === 1 ? "İlk mum" : `${entry.barsAgo}. mum`;
+        const volIcon = entry.volumeConfirmed ? ' 🔊' : '';
+        const sqzIcon = entry.squeezeConfirmed ? ' 🎯' : '';
+        return `<span class="${dirClass}" style="font-weight:800;">${entry.direction}</span>${volIcon}${sqzIcon}<div class="sub-cell">${barsLabel}</div>`;
+    }
+
     el.innerHTML = `
-        <div class="section-desc" style="margin-bottom:10px;">Tarama saati: ${now}</div>
+        <div class="section-desc" style="margin-bottom:10px;">
+            Tarama saati: ${now} — 🔊 = hacim patlamasıyla teyitli, 🎯 = LazyBear Squeeze Momentum
+            aynı yönde yeni patladı (en güçlü teyit). "Uyum" sütunu, kaç zaman diliminin AYNI yönde
+            sinyal verdiğini gösterir (3/3 en güçlüsü).
+        </div>
         <div class="card">
             <table>
-                <thead><tr><th>Coin</th><th>24s Değişim</th><th>Zaman Dilimi</th><th>Yön</th><th>Kaç Mum Önce</th><th>Fiyat</th></tr></thead>
+                <thead><tr><th>Coin</th><th>24s Değişim</th><th>Uyum</th><th>1dk</th><th>3dk</th><th>5dk</th></tr></thead>
                 <tbody>
-                    ${findings.map(f => {
-                        const dirClass = f.direction === "AL" ? "chip-confirmed" : "chip-hot";
-                        const barsLabel = f.barsAgo === 1 ? "İlk mum (en son kapanan)" : `${f.barsAgo}. mum önce`;
+                    ${rows.map(r => {
+                        const confClass = r.confluence >= 3 ? "chip-confirmed" : r.confluence === 2 ? "chip-warm" : "chip-mild";
                         return `
-                        <tr onclick="openCoinAnalysis('${f.symbol}')">
-                            <td data-label="Coin"><div class="sym">${f.symbol}</div></td>
-                            <td class="${f.dailyChangePercent>=0?'pos':'neg'}" data-label="24s Değişim">${f.dailyChangePercent>=0?'+':''}${f.dailyChangePercent.toFixed(1)}%</td>
-                            <td data-label="Zaman Dilimi" class="num">${f.interval}</td>
-                            <td data-label="Yön"><span class="status-chip ${dirClass}"><span class="dot"></span>${f.direction}</span></td>
-                            <td data-label="Kaç Mum Önce">${barsLabel}</td>
-                            <td class="num" data-label="Fiyat">$${f.price}</td>
+                        <tr onclick="openCoinAnalysis('${r.symbol}')">
+                            <td data-label="Coin"><div class="sym">${r.symbol}</div></td>
+                            <td class="${r.dailyChangePercent>=0?'pos':'neg'}" data-label="24s Değişim">${r.dailyChangePercent>=0?'+':''}${r.dailyChangePercent.toFixed(1)}%</td>
+                            <td data-label="Uyum"><span class="status-chip ${confClass}"><span class="dot"></span>${r.confluence}/3 ${r.confluenceDirection}</span></td>
+                            <td data-label="1dk">${cellHtml(r.byInterval["1m"])}</td>
+                            <td data-label="3dk">${cellHtml(r.byInterval["3m"])}</td>
+                            <td data-label="5dk">${cellHtml(r.byInterval["5m"])}</td>
                         </tr>
                     `;}).join('')}
                 </tbody>
