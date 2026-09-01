@@ -358,6 +358,7 @@
                 </div>
             </div>
             <div class="icon-actions">
+                <button class="icon-btn" onclick="openFollowLinePage()">📈 Follow Line Sinyalleri</button>
                 <button class="icon-btn" onclick="openScalpPage()">⚡ Hızlı Fırsat Taraması</button>
                 <button class="icon-btn" onclick="exportAllData(this)">⬇ Dışa Aktar</button>
                 <button class="icon-btn" id="dip-nav-btn" onclick="openDipPage()" style="position:relative;">📉 Dip Toparlanma<span id="dip-badge" class="nav-badge" style="display:none;"></span></button>
@@ -502,6 +503,14 @@
     <div class="modal-box">
         <button class="modal-close" onclick="closeOptimizerPanel()">×</button>
         <div id="optimizer-content"></div>
+    </div>
+</div>
+
+<!-- Follow Line Sinyalleri (Bollinger+ATR trend takip cizgisi) - CANLI, saklanmiyor -->
+<div class="modal-overlay" id="followline-overlay" onclick="if(event.target===this) closeFollowLinePage()">
+    <div class="modal-box" style="max-width: 1200px; width: 95vw;">
+        <button class="modal-close" onclick="closeFollowLinePage()">×</button>
+        <div id="followline-content"></div>
     </div>
 </div>
 
@@ -1974,6 +1983,199 @@ function applyOptimizedConfig(pm, plm, rm) {
     setStatus(`✅ Optimize edilmiş ayarlar uygulandı (Pump×${pm} / Pullback×${plm} / Reentry×${rm}) ve sinyaller yeniden hesaplandı.`, "ok");
 }
 
+// ================= FOLLOW LINE SINYALLERI (Bollinger+ATR trend takip cizgisi) =================
+// Kullanicinin verdigi TradingView Pine Script gostergesinin (Follow Line / FL) BIREBIR
+// JavaScript karsiligi. Mantik: Bollinger bandi disina cikildiginda (yukari veya asagi),
+// fiyat bandin disinda kaldigi surece bir "takip cizgisi" (dusukten/yuksekten ATR kadar
+// icerde) kurulur ve SADECE lehte yonde ilerler (trailing stop gibi). Bu cizginin yon
+// degistirdigi an AL/SAT sinyali dogar.
+const FOLLOWLINE_INTERVALS = ["1m", "3m", "5m"];
+const FL_BB_PERIOD = 21, FL_BB_DEV = 1.0, FL_ATR_PERIOD = 5, FL_USE_ATR = true;
+
+/** Wilder (RMA) yontemiyle ATR serisi - Pine'daki ta.atr() ile ayni sonucu verir. */
+function computeATRSeries(klines, period) {
+    const n = klines.length;
+    const trs = klines.map((k, i) => i === 0 ? k.high - k.low : Math.max(
+        k.high - k.low, Math.abs(k.high - klines[i - 1].close), Math.abs(k.low - klines[i - 1].close)
+    ));
+    const atr = new Array(n).fill(null);
+    for (let i = 0; i < n; i++) {
+        if (i < period - 1) continue;
+        if (i === period - 1) atr[i] = trs.slice(0, period).reduce((a, b) => a + b, 0) / period;
+        else atr[i] = (atr[i - 1] * (period - 1) + trs[i]) / period;
+    }
+    return atr;
+}
+
+/**
+ * Follow Line serisini hesaplar. Pine'daki "var" degiskenler (BBSignal, FollowLine, iTrend)
+ * bar'lar arasinda KALICIDIR - bu yuzden burada da bir onceki degeri elle tasiyoruz.
+ * Her bar icin { followLine, iTrend, buy, sell } dondurur.
+ */
+function computeFollowLineSeries(klines, bbPeriod = FL_BB_PERIOD, bbDev = FL_BB_DEV, atrPeriod = FL_ATR_PERIOD, useATR = FL_USE_ATR) {
+    const n = klines.length;
+    const closes = klines.map(k => k.close);
+    const atrSeries = computeATRSeries(klines, atrPeriod);
+
+    let bbSignal = 0, followLine = null, iTrend = 0;
+    const bars = [];
+
+    for (let i = 0; i < n; i++) {
+        let bbUpper = null, bbLower = null;
+        if (i >= bbPeriod - 1) {
+            const window = closes.slice(i - bbPeriod + 1, i + 1);
+            const mean = window.reduce((a, b) => a + b, 0) / bbPeriod;
+            const variance = window.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / bbPeriod;
+            const sd = Math.sqrt(variance);
+            bbUpper = mean + sd * bbDev;
+            bbLower = mean - sd * bbDev;
+        }
+
+        if (bbUpper != null) {
+            if (closes[i] > bbUpper) bbSignal = 1;
+            else if (closes[i] < bbLower) bbSignal = -1;
+            // Ikisi de degilse bbSignal ONCEKI degerini korur (Pine'daki "var" davranisi)
+        }
+
+        const atrVal = atrSeries[i];
+        const prevFollowLine = followLine;
+
+        if (bbSignal === 1) {
+            let candidate = (useATR && atrVal != null) ? klines[i].low - atrVal : klines[i].low;
+            if (prevFollowLine != null && candidate < prevFollowLine) candidate = prevFollowLine;
+            followLine = candidate;
+        } else if (bbSignal === -1) {
+            let candidate = (useATR && atrVal != null) ? klines[i].high + atrVal : klines[i].high;
+            if (prevFollowLine != null && candidate > prevFollowLine) candidate = prevFollowLine;
+            followLine = candidate;
+        }
+
+        let newITrend = iTrend;
+        if (followLine != null && prevFollowLine != null) {
+            if (followLine > prevFollowLine) newITrend = 1;
+            else if (followLine < prevFollowLine) newITrend = -1;
+        }
+
+        const buy = (iTrend === -1 && newITrend === 1);
+        const sell = (iTrend === 1 && newITrend === -1);
+        iTrend = newITrend;
+
+        bars.push({ index: i, time: klines[i].openTime, close: klines[i].close, followLine, iTrend, buy, sell });
+    }
+    return bars;
+}
+
+function closeFollowLinePage() { document.getElementById("followline-overlay").classList.remove("open"); }
+
+function openFollowLinePage() {
+    const overlay = document.getElementById("followline-overlay");
+    overlay.classList.add("open");
+    document.getElementById("followline-content").innerHTML = `
+        <div class="modal-title">📈 Follow Line Sinyalleri</div>
+        <div class="modal-subtitle">
+            Bollinger Bandı + ATR ile hesaplanan bir trend-takip çizgisi (TradingView "Follow Line"
+            göstergesinin birebir uyarlaması). 1dk / 3dk / 5dk grafiklerinin her birinde ayrı ayrı
+            çalışır — <strong>hangi zaman diliminde, kaç mum önce</strong> AL/SAT sinyali verdiyse
+            onu gösterir. Bu, ana sistemden bağımsız, sadece canlı çalışan bir modüldür.
+        </div>
+        <button id="run-followline-btn" onclick="runFollowLineScan()" style="width:100%; padding:14px; background:var(--amber); color:#000; border:none; border-radius:10px; font-weight:800; cursor:pointer; margin-bottom:16px;">▶ Şimdi Tara</button>
+        <div id="followline-results"></div>
+        <div class="modal-disclaimer" style="margin-top:16px;">
+            Bu bir yatırım tavsiyesi değildir. Follow Line, gecikmeli (lagging) bir trend göstergesidir —
+            sinyal genelde hareket biraz başladıktan sonra oluşur, tam dipten/tepeden yakalamaz.
+        </div>
+    `;
+}
+
+async function runFollowLineScan() {
+    const btn = document.getElementById("run-followline-btn");
+    const el = document.getElementById("followline-results");
+    btn.disabled = true;
+    btn.textContent = "⏳ Taranıyor...";
+    el.innerHTML = '<div class="modal-loading">⏳ En likit coinler belirleniyor...</div>';
+
+    const RECENT_BARS = 5; // son kac mum icindeki sinyalleri "guncel" sayalim
+
+    try {
+        const tickers = await fetch24hrTickers();
+        tickers.sort((a, b) => b.volume - a.volume);
+        const universe = tickers.slice(0, SCALP_UNIVERSE_SIZE);
+
+        const findings = [];
+        let done = 0;
+        for (const t of universe) {
+            done++;
+            el.innerHTML = `<div class="modal-loading">⏳ Taranıyor... (${done}/${universe.length}) — ${t.symbol}</div>`;
+            for (const interval of FOLLOWLINE_INTERVALS) {
+                try {
+                    const klines = await fetchScalpKlines(t.symbol, interval, 100);
+                    const series = computeFollowLineSeries(klines);
+                    // Son RECENT_BARS mum icinde (en yeniden en eskiye) ilk bulunan sinyali al
+                    for (let barsAgo = 1; barsAgo <= RECENT_BARS; barsAgo++) {
+                        const bar = series[series.length - barsAgo];
+                        if (!bar) break;
+                        if (bar.buy || bar.sell) {
+                            findings.push({
+                                symbol: t.symbol, interval, barsAgo,
+                                direction: bar.buy ? "AL" : "SAT", price: bar.close, time: bar.time
+                            });
+                            break; // bu zaman dilimi icin en yeni sinyali bulduk, sonraki interval'a gec
+                        }
+                    }
+                } catch (e) { console.warn(t.symbol, interval, "hata:", e.message); }
+                await sleep(50);
+            }
+        }
+
+        findings.sort((a, b) => a.barsAgo - b.barsAgo);
+        renderFollowLineResults(findings);
+    } catch (e) {
+        console.error(e);
+        el.innerHTML = `<div class="verdict-box verdict-bearish">Hata: ${e.message}</div>`;
+    } finally {
+        btn.disabled = false;
+        btn.textContent = "▶ Şimdi Tara";
+    }
+}
+
+function renderFollowLineResults(findings) {
+    const el = document.getElementById("followline-results");
+    const now = new Date().toLocaleTimeString('tr-TR');
+
+    if (!findings.length) {
+        el.innerHTML = `
+            <div class="empty-state" style="padding:30px 0;">
+                <span class="big-emoji">◎</span>Şu an yakın zamanda (son 5 mum içinde) sinyal veren
+                coin bulunamadı (${now}). Birkaç dakika sonra tekrar dene.
+            </div>
+        `;
+        return;
+    }
+
+    el.innerHTML = `
+        <div class="section-desc" style="margin-bottom:10px;">Tarama saati: ${now}</div>
+        <div class="card">
+            <table>
+                <thead><tr><th>Coin</th><th>Zaman Dilimi</th><th>Yön</th><th>Kaç Mum Önce</th><th>Fiyat</th></tr></thead>
+                <tbody>
+                    ${findings.map(f => {
+                        const dirClass = f.direction === "AL" ? "chip-confirmed" : "chip-hot";
+                        const barsLabel = f.barsAgo === 1 ? "İlk mum (en son kapanan)" : `${f.barsAgo}. mum önce`;
+                        return `
+                        <tr onclick="openCoinAnalysis('${f.symbol}')">
+                            <td data-label="Coin"><div class="sym">${f.symbol}</div></td>
+                            <td data-label="Zaman Dilimi" class="num">${f.interval}</td>
+                            <td data-label="Yön"><span class="status-chip ${dirClass}"><span class="dot"></span>${f.direction}</span></td>
+                            <td data-label="Kaç Mum Önce">${barsLabel}</td>
+                            <td class="num" data-label="Fiyat">$${f.price}</td>
+                        </tr>
+                    `;}).join('')}
+                </tbody>
+            </table>
+        </div>
+    `;
+}
+
 // ================= HIZLI FIRSAT TARAMASI (Scalping) - canli, kisa vadeli, saklanmiyor =================
 // Bu modul ana sistemden TAMAMEN BAGIMSIZ calisir: veritabanina yazmaz, gecmis tutmaz.
 // Sebep: 1-15 dakikalik sinyaller birkac dakika icinde gecersiz kalir - bunlari Firestore'da
@@ -2026,7 +2228,7 @@ function computeVolumeRatio(volumes, lookback = 20) {
 }
 
 /** Bir zaman diliminin (interval) verisinden yon puani cikarir: +1 boga, -1 ayi, 0 notr/belirsiz. */
-function scoreTimeframe(klinesArr) {
+function scoreTimeframe(klinesArr, looseRsiBounds) {
     const closes = klinesArr.map(k => k.close);
     const volumes = klinesArr.map(k => k.volume);
     const momentum = computeMomentum(closes, 5);
@@ -2035,11 +2237,107 @@ function scoreTimeframe(klinesArr) {
 
     if (momentum == null || rsi == null || volRatio == null) return { score: 0, momentum, rsi, volRatio };
 
+    // TREND rejimi zaten onaylanmissa, RSI'nin "asiri alim/satim" bolgesinde takili kalmasi
+    // normaldir (guclu trendlerde RSI uzun sure yuksek/dusuk kalir) - bu durumda esigi gevsetiyoruz,
+    // yoksa tam da yakalamak istedigimiz guclu hareketleri RSI filtresi yuzunden kacirmis oluruz.
+    const upperBound = looseRsiBounds ? 95 : 75;
+    const lowerBound = looseRsiBounds ? 5 : 25;
+
     let score = 0;
     const strongVolume = volRatio >= 1.5;
-    if (momentum >= 0.5 && rsi < 75 && strongVolume) score = 1;
-    else if (momentum <= -0.5 && rsi > 25 && strongVolume) score = -1;
+    if (momentum >= 0.5 && rsi < upperBound && strongVolume) score = 1;
+    else if (momentum <= -0.5 && rsi > lowerBound && strongVolume) score = -1;
     return { score, momentum, rsi, volRatio };
+}
+
+/**
+ * Kaufman Verimlilik Orani (Efficiency Ratio): fiyat NET olarak ne kadar yol almis,
+ * bunu ADIM ADIM ne kadar yol katettigine boler. 1'e yakinsa duz/verimli bir trend
+ * (az geri donusle ilerliyor); 0'a yakinsa yatay/gurultulu (surekli ileri-geri).
+ * Bu, "trend mi yatay mi" ayrimini basit ve hizli yapmamizi sagliyor.
+ */
+function computeEfficiencyRatio(closes, period = 14) {
+    if (closes.length < period + 1) return null;
+    const recent = closes.slice(-period - 1);
+    const netChange = Math.abs(recent[recent.length - 1] - recent[0]);
+    let sumMoves = 0;
+    for (let i = 1; i < recent.length; i++) sumMoves += Math.abs(recent[i] - recent[i - 1]);
+    return sumMoves === 0 ? 0 : netChange / sumMoves;
+}
+
+/**
+ * Bollinger sikisma + kirilim tespiti (ana sistemdeki klasik squeeze mantiginin
+ * dakikalik olcekte uyarlanmasi). Yatay piyasalarda momentum yerine BUNU kullanmak,
+ * "zaten hareket eden" fiyati kovalamak yerine "sikisip patlayan" ani yakalamayi hedefler.
+ */
+function computeBollingerBreakout(klinesArr, period = 20, mult = 2) {
+    if (klinesArr.length < period + 5) return { available: false };
+    const closes = klinesArr.map(k => k.close);
+    const volumes = klinesArr.map(k => k.volume);
+    const n = closes.length;
+
+    function bandAt(idx) {
+        const window = closes.slice(idx - period + 1, idx + 1);
+        const mean = window.reduce((a, b) => a + b, 0) / window.length;
+        const variance = window.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / window.length;
+        const std = Math.sqrt(variance);
+        return { mean, upper: mean + mult * std, lower: mean - mult * std, width: mean === 0 ? 0 : (2 * mult * std) / mean * 100 };
+    }
+
+    const widths = [];
+    for (let i = period - 1; i < n; i++) widths.push(bandAt(i).width);
+    if (widths.length < 5) return { available: false };
+
+    const currentBand = bandAt(n - 1);
+    const historicalAvgWidth = widths.slice(0, -1).reduce((a, b) => a + b, 0) / (widths.length - 1);
+    const isSqueeze = currentBand.width < historicalAvgWidth * 0.7;
+
+    const lastClose = closes[n - 1];
+    const volRatio = computeVolumeRatio(volumes, 20);
+    let breakout = 0;
+    if (volRatio != null && volRatio >= 1.5) {
+        if (lastClose > currentBand.upper) breakout = 1;
+        else if (lastClose < currentBand.lower) breakout = -1;
+    }
+
+    return { available: true, isSqueeze, breakout, width: currentBand.width, avgWidth: historicalAvgWidth, volRatio };
+}
+
+/**
+ * UYARLANABILIR SINYAL URETICI - hem canli tarama hem gecmise donuk test AYNI bu
+ * fonksiyonu cagirir (celiski olmasin diye tek kaynak). Once 15dk zaman diliminde
+ * "trend mi yatay mi" diye bakar:
+ *  - TREND varsa -> mevcut 4 zaman dilimli momentum yontemini kullanir
+ *  - YATAY ise   -> 5dk + 15dk'da Bollinger sikisma/kirilim yontemine gecer
+ */
+function generateAdaptiveSignal(seriesByTF) {
+    const closes15 = seriesByTF["15m"].map(k => k.close);
+    // ONEMLI: rejimi belirlerken SON MUMU HARIC tutuyoruz - "kirilimdan hemen once nasil bir
+    // ortamdaydik" sorusuna cevap ariyoruz. Son mumu da dahil etseydik, kirilimin kendisi
+    // (guclu, tek yonlu bir hareket oldugu icin) yanlislikla "zaten trend" gibi gorunup
+    // sikisma+kirilim stratejisinin devreye girmesini engellerdi.
+    const trailingCloses15 = closes15.slice(0, -1);
+    const efficiencyRatio = computeEfficiencyRatio(trailingCloses15, 14);
+    const trending = efficiencyRatio != null && efficiencyRatio >= 0.35;
+
+    if (trending || efficiencyRatio == null) {
+        const scores = {};
+        for (const tf of SCALP_INTERVALS) scores[tf] = scoreTimeframe(seriesByTF[tf], true);
+        const totalScore = SCALP_INTERVALS.reduce((s, tf) => s + scores[tf].score, 0);
+        const agreeCount = SCALP_INTERVALS.filter(tf => scores[tf].score === Math.sign(totalScore) && scores[tf].score !== 0).length;
+        if (totalScore !== 0 && agreeCount >= 2) {
+            return { direction: totalScore > 0 ? "LONG" : "SHORT", strength: agreeCount, regime: "TREND", strategy: "Momentum" };
+        }
+        return null;
+    } else {
+        const b5 = computeBollingerBreakout(seriesByTF["5m"]);
+        const b15 = computeBollingerBreakout(seriesByTF["15m"]);
+        if (!b5.available || !b15.available) return null;
+        if (b5.breakout !== 0 && b5.breakout === b15.breakout) {
+            return { direction: b5.breakout > 0 ? "LONG" : "SHORT", strength: 2, regime: "YATAY", strategy: "Sıkışma+Kırılım" };
+        }
+        return null;
+    }
 }
 
 function closeScalpPage() { document.getElementById("scalp-overlay").classList.remove("open"); }
@@ -2084,30 +2382,26 @@ async function runScalpScan() {
             done++;
             resultsEl.innerHTML = `<div class="modal-loading">⏳ Taranıyor... (${done}/${universe.length}) — ${t.symbol}</div>`;
             try {
-                const tfData = {};
+                const seriesByTF = {};
+                let lastPrice = null, avgRange15m = null;
                 for (const interval of SCALP_INTERVALS) {
                     const klines = await fetchScalpKlines(t.symbol, interval, 50);
-                    tfData[interval] = scoreTimeframe(klines);
+                    seriesByTF[interval] = klines;
                     if (interval === "15m") {
-                        // Hizli hedef/stop icin son 14 mumun ortalama araligini (basit ATR) hesapla
                         const ranges = klines.slice(-14).map(k => k.high - k.low);
-                        tfData._avgRange15m = ranges.reduce((a, b) => a + b, 0) / ranges.length;
-                        tfData._lastPrice = klines[klines.length - 1].close;
+                        avgRange15m = ranges.reduce((a, b) => a + b, 0) / ranges.length;
+                        lastPrice = klines[klines.length - 1].close;
                     }
                     await sleep(60);
                 }
 
-                const totalScore = SCALP_INTERVALS.reduce((sum, iv) => sum + tfData[iv].score, 0);
-                const agreeCount = SCALP_INTERVALS.filter(iv => tfData[iv].score === Math.sign(totalScore) && tfData[iv].score !== 0).length;
-
-                if (totalScore !== 0 && agreeCount >= 2) {
-                    const direction = totalScore > 0 ? "LONG" : "SHORT";
-                    const price = tfData._lastPrice;
-                    const range = tfData._avgRange15m;
-                    const target = direction === "LONG" ? price + range : price - range;
-                    const stop = direction === "LONG" ? price - range * 0.5 : price + range * 0.5;
+                const signal = generateAdaptiveSignal(seriesByTF);
+                if (signal) {
+                    const target = signal.direction === "LONG" ? lastPrice + avgRange15m : lastPrice - avgRange15m;
+                    const stop = signal.direction === "LONG" ? lastPrice - avgRange15m * 0.5 : lastPrice + avgRange15m * 0.5;
                     results.push({
-                        symbol: t.symbol, direction, agreeCount, price, target, stop, tfData
+                        symbol: t.symbol, direction: signal.direction, agreeCount: signal.strength,
+                        regime: signal.regime, strategy: signal.strategy, price: lastPrice, target, stop
                     });
                 }
             } catch (e) { console.warn(t.symbol, "scalp hatasi:", e.message); }
@@ -2177,23 +2471,22 @@ async function runScalpBacktest() {
                 while (i < oneMin.length - 20) { // sonuna en az 20 dk birakiyoruz - sonucu kontrol edebilmek icin
                     const nowTime = oneMin[i].openTime;
 
-                    // Her zaman diliminde "su ana kadar tamamlanmis" mumlarla skor hesapla (gelecek gorulmuyor)
-                    const scores = {};
+                    // Her zaman diliminde "su ana kadar tamamlanmis" mumlarla seri olustur (gelecek gorulmuyor)
+                    const seriesByTF = {};
                     let ready = true;
                     for (const tf of SCALP_INTERVALS) {
                         const bars = series[tf].filter(k => k.openTime <= nowTime);
                         if (bars.length < 25) { ready = false; break; }
-                        scores[tf] = scoreTimeframe(bars);
+                        seriesByTF[tf] = bars;
                     }
                     if (!ready) { i++; continue; }
 
-                    const totalScore = SCALP_INTERVALS.reduce((s, tf) => s + scores[tf].score, 0);
-                    const agreeCount = SCALP_INTERVALS.filter(tf => scores[tf].score === Math.sign(totalScore) && scores[tf].score !== 0).length;
+                    const signal = generateAdaptiveSignal(seriesByTF);
 
-                    if (totalScore !== 0 && agreeCount >= 2) {
-                        const direction = totalScore > 0 ? "LONG" : "SHORT";
+                    if (signal) {
+                        const direction = signal.direction;
                         const entryPrice = oneMin[i].close;
-                        const bars15 = series["15m"].filter(k => k.openTime <= nowTime).slice(-14);
+                        const bars15 = seriesByTF["15m"].slice(-14);
                         const avgRange = bars15.reduce((s, k) => s + (k.high - k.low), 0) / bars15.length;
                         const target = direction === "LONG" ? entryPrice + avgRange : entryPrice - avgRange;
                         const stop = direction === "LONG" ? entryPrice - avgRange * 0.5 : entryPrice + avgRange * 0.5;
@@ -2212,7 +2505,7 @@ async function runScalpBacktest() {
                             }
                         }
 
-                        allTrades.push({ symbol: t.symbol, direction, agreeCount, entryPrice, outcome, barsToOutcome, time: nowTime });
+                        allTrades.push({ symbol: t.symbol, direction, agreeCount: signal.strength, regime: signal.regime, strategy: signal.strategy, entryPrice, outcome, barsToOutcome, time: nowTime });
                         i += 20; // ayni sinyali hemen tekrar tekrar saymamak icin ileri atla
                     } else {
                         i++;
@@ -2263,13 +2556,13 @@ function renderScalpBacktestResults(trades) {
         </div>
         <div class="card" style="max-height:400px; overflow-y:auto;">
             <table>
-                <thead><tr><th>Coin</th><th>Yön</th><th>Uyum</th><th>Giriş</th><th>Sonuç</th><th>Süre</th></tr></thead>
+                <thead><tr><th>Coin</th><th>Yön</th><th>Rejim / Strateji</th><th>Giriş</th><th>Sonuç</th><th>Süre</th></tr></thead>
                 <tbody>
                     ${trades.slice().reverse().map(t => `
                         <tr style="cursor:default;">
                             <td data-label="Coin"><div class="sym">${t.symbol}</div></td>
                             <td data-label="Yön">${t.direction}</td>
-                            <td class="num" data-label="Uyum">${t.agreeCount}/4</td>
+                            <td class="num" data-label="Rejim / Strateji">${t.regime} · ${t.strategy}</td>
                             <td class="num" data-label="Giriş">$${t.entryPrice}</td>
                             <td data-label="Sonuç"><span class="${t.outcome==='KAZANC'?'pos':t.outcome==='KAYIP'?'neg':''}">${t.outcome}</span></td>
                             <td class="num" data-label="Süre">${t.barsToOutcome ? t.barsToOutcome + ' dk' : '-'}</td>
@@ -2306,7 +2599,7 @@ function renderScalpResults(results) {
         <div class="section-desc" style="margin-bottom:10px;">Tarama saati: ${now} — bu sinyaller sadece birkaç dakika geçerlidir.</div>
         <div class="card">
             <table>
-                <thead><tr><th>Coin</th><th>Yön</th><th>Uyum</th><th>Fiyat</th><th>Hızlı Hedef</th><th>Stop</th></tr></thead>
+                <thead><tr><th>Coin</th><th>Yön</th><th>Rejim / Strateji</th><th>Fiyat</th><th>Hızlı Hedef</th><th>Stop</th></tr></thead>
                 <tbody>
                     ${results.map(r => {
                         const dirClass = r.direction === "LONG" ? "chip-confirmed" : "chip-hot";
@@ -2315,7 +2608,7 @@ function renderScalpResults(results) {
                         <tr onclick="openCoinAnalysis('${r.symbol}')">
                             <td data-label="Coin"><div class="sym">${r.symbol}</div></td>
                             <td data-label="Yön"><span class="status-chip ${dirClass}"><span class="dot"></span>${r.direction}</span></td>
-                            <td data-label="Uyum" class="num">${r.agreeCount}/4 zaman dilimi</td>
+                            <td data-label="Rejim / Strateji" class="num">${r.regime} · ${r.strategy}</td>
                             <td class="num" data-label="Fiyat">$${r.price}</td>
                             <td class="${dirColor}" data-label="Hızlı Hedef">$${r.target.toFixed(6)}</td>
                             <td class="neg" data-label="Stop">$${r.stop.toFixed(6)}</td>
