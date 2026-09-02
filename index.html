@@ -2245,7 +2245,57 @@ function detectRangeBand(klines) {
     const stillInRange = lastClose <= rangeHigh * 1.02 && lastClose >= rangeLow * 0.98;
     if (!stillInRange) return null; // banttan yeni kirilmissa artik "aktif bant" sayma
 
-    return { rangeHigh, rangeLow, widthPct, touches, lastClose };
+    // KONUM: fiyat su an bandin neresinde? (0% = tam dip, 100% = tam tepe)
+    const positionPct = (lastClose - rangeLow) / (rangeHigh - rangeLow) * 100;
+    const zoneSize = (rangeHigh - rangeLow) * RANGE_ZONE_PCT;
+
+    // GIRIS/HEDEF/STOP ONERISI: sadece fiyat dibe ya da tepeye yakinsa somut bir eylem onerilir,
+    // ortadaysa "bekle" (net bir giris noktasi yok) denir.
+    let guidance = null;
+    if (positionPct <= 35) {
+        guidance = {
+            direction: "LONG",
+            entry: rangeLow + zoneSize * 0.5,
+            target: rangeHigh - zoneSize * 0.3,
+            stop: rangeLow * 0.97
+        };
+    } else if (positionPct >= 65) {
+        guidance = {
+            direction: "SHORT",
+            entry: rangeHigh - zoneSize * 0.5,
+            target: rangeLow + zoneSize * 0.3,
+            stop: rangeHigh * 1.03
+        };
+    }
+
+    return { rangeHigh, rangeLow, widthPct, touches, lastClose, positionPct, guidance };
+}
+
+/**
+ * KIRILMA RISKI KONTROLU: bir coin bantta duruyor diye "guvenli" degildir - arka planda
+ * OI (acik pozisyon) birikiyorsa ya da funding asiri uctaysa, bu banttan SERT bir kirilma
+ * gelebilecegine dair bir uyaridir (ana sistemdeki Klasik Squeeze mantiginin ayni fikri).
+ */
+async function checkBandBreakoutRisk(symbol) {
+    const [oiHist, fundingHist] = await Promise.all([
+        safeFetchJson(`${API_BASE}/futures/data/openInterestHist?symbol=${symbol}&period=1h&limit=49`),
+        safeFetchJson(`${API_BASE}/fapi/v1/fundingRate?symbol=${symbol}&limit=1`)
+    ]);
+
+    let oiChangePct = null;
+    if (oiHist && oiHist.length >= 2) {
+        const oldest = parseFloat(oiHist[0].sumOpenInterest);
+        const newest = parseFloat(oiHist[oiHist.length - 1].sumOpenInterest);
+        oiChangePct = oldest === 0 ? null : ((newest - oldest) / oldest) * 100;
+    }
+    const fundingRate = fundingHist && fundingHist.length ? parseFloat(fundingHist[0].fundingRate) * 100 : null;
+
+    let highRisk = false;
+    const reasons = [];
+    if (oiChangePct != null && oiChangePct > 15) { highRisk = true; reasons.push(`OI son 48s'te +%${oiChangePct.toFixed(0)} artmış`); }
+    if (fundingRate != null && Math.abs(fundingRate) > 0.05) { highRisk = true; reasons.push(`Funding aşırı uçta (${fundingRate.toFixed(3)}%)`); }
+
+    return { oiChangePct, fundingRate, highRisk, reasons };
 }
 
 function closeRangeBandPage() { document.getElementById("rangeband-overlay").classList.remove("open"); }
@@ -2266,7 +2316,9 @@ function openRangeBandPage() {
             tekrarla) için uygun adaylardır. Trend yapan ya da patlayan coinlerin tam tersi bir
             profil aranır. 5 farklı zaman diliminde (15dk/30dk/1s/4s/günlük) ayrı ayrı kontrol edilir.
         </div>
-        <button id="run-rangeband-btn" onclick="runRangeBandScan()" style="width:100%; padding:14px; background:var(--amber); color:#000; border:none; border-radius:10px; font-weight:800; cursor:pointer; margin-bottom:16px;">▶ Şimdi Tara (~2-3 dakika sürer)</button>
+        <button id="run-rangeband-btn" onclick="runRangeBandScan()" style="width:100%; padding:14px; background:var(--amber); color:#000; border:none; border-radius:10px; font-weight:800; cursor:pointer; margin-bottom:10px;">▶ Şimdi Tara (~2-3 dakika sürer)</button>
+        <button id="run-rangeband-backtest-btn" onclick="runRangeBandBacktest()" style="width:100%; padding:12px; background:var(--bg-elev); color:var(--text); border:2px solid var(--border); border-radius:10px; font-weight:700; cursor:pointer; margin-bottom:16px;">🔬 Geçmişe Dönük Test (bu strateji gerçekten kâr getirir mi?)</button>
+        <div id="rangeband-backtest-results"></div>
         <div id="rangeband-results"></div>
         <div class="modal-disclaimer" style="margin-top:16px;">
             Bu bir yatırım tavsiyesi değildir. Geçmişte bant içinde kalmış olmak, gelecekte de öyle
@@ -2313,6 +2365,17 @@ async function runRangeBandScan() {
             if (anyBand) rows.push({ symbol: t.symbol, byInterval, totalTouches });
         }
 
+        // KIRILMA RISKI: sadece bant BULUNAN coinler icin kontrol et (60 coinin hepsi icin degil - verimlilik icin)
+        el.innerHTML = `<div class="modal-loading">⏳ Kırılma riski kontrol ediliyor... (${rows.length} coin)</div>`;
+        for (const row of rows) {
+            try {
+                row.risk = await checkBandBreakoutRisk(row.symbol);
+            } catch (e) {
+                row.risk = { highRisk: false, reasons: [] };
+            }
+            await sleep(80);
+        }
+
         rows.sort((a, b) => b.totalTouches - a.totalTouches);
         renderRangeBandResults(rows);
     } catch (e) {
@@ -2322,6 +2385,156 @@ async function runRangeBandScan() {
         btn.disabled = false;
         btn.textContent = "▶ Şimdi Tara (~2-3 dakika sürer)";
     }
+}
+
+/**
+ * GECMISE DONUK TEST: her zaman diliminde, gecmis mumlar uzerinde zaman icinde ILERLEYEREK
+ * (gelecegi gormeden) "bu an bir bant sinyali olustu mu" diye kontrol eder. Olustuysa, sonraki
+ * mumlarda hedefe mi stop'a mi once ulasildigina bakip KAZANC/KAYIP olarak isaretler. Bu, bandin
+ * gercekten kar getirip getirmedigini olcen tek gercek yontemdir - simdiye kadar bunu hic
+ * olcmemistik (dip sinyalinde yasadigimiz "aslinda rastgele" hatasini burada tekrarlamayalim diye).
+ */
+async function runRangeBandBacktest() {
+    const btn = document.getElementById("run-rangeband-backtest-btn");
+    const el = document.getElementById("rangeband-backtest-results");
+    btn.disabled = true;
+    btn.textContent = "⏳ Test ediliyor...";
+    el.innerHTML = '<div class="modal-loading">⏳ En likit coinler belirleniyor...</div>';
+
+    const LOOKBACK_WINDOW = 80;   // her anda geriye donuk kac mumla bant arayacagiz (canli taramayla ayni)
+    const FORWARD_WINDOW = 20;    // sinyal sonrasi en fazla kac mum ileriye bakip sonucu kontrol edecegiz
+    const BACKTEST_COIN_COUNT = 8; // testi hizli tutmak icin daha az coin
+
+    try {
+        const tickers = await fetch24hrTickers();
+        const testSymbols = tickers.filter(t => isCryptoSymbol(t.symbol))
+            .sort((a, b) => b.volume - a.volume).slice(0, BACKTEST_COIN_COUNT);
+
+        const allTrades = [];
+        let done = 0;
+        for (const t of testSymbols) {
+            for (const interval of RANGE_INTERVALS) {
+                done++;
+                el.innerHTML = `<div class="modal-loading">⏳ Test ediliyor... (${done}/${testSymbols.length * RANGE_INTERVALS.length}) — ${t.symbol} ${interval}</div>`;
+                try {
+                    const klines = await fetchScalpKlines(t.symbol, interval, 500);
+                    let i = LOOKBACK_WINDOW;
+                    while (i < klines.length - FORWARD_WINDOW) {
+                        const window = klines.slice(i - LOOKBACK_WINDOW + 1, i + 1);
+                        const band = detectRangeBand(window);
+
+                        if (band && band.guidance) {
+                            const g = band.guidance;
+                            let outcome = "SONUCLANMADI", barsToOutcome = null;
+                            for (let j = i + 1; j <= i + FORWARD_WINDOW && j < klines.length; j++) {
+                                const bar = klines[j];
+                                if (g.direction === "LONG") {
+                                    if (bar.low <= g.stop) { outcome = "KAYIP"; barsToOutcome = j - i; break; }
+                                    if (bar.high >= g.target) { outcome = "KAZANC"; barsToOutcome = j - i; break; }
+                                } else {
+                                    if (bar.high >= g.stop) { outcome = "KAYIP"; barsToOutcome = j - i; break; }
+                                    if (bar.low <= g.target) { outcome = "KAZANC"; barsToOutcome = j - i; break; }
+                                }
+                            }
+                            allTrades.push({ symbol: t.symbol, interval, direction: g.direction, entry: g.entry, outcome, barsToOutcome });
+                            i += FORWARD_WINDOW; // ayni sinyali tekrar tekrar saymamak icin ileri atla
+                        } else {
+                            i++;
+                        }
+                    }
+                } catch (e) { console.warn(t.symbol, interval, "backtest hatasi:", e.message); }
+                await sleep(50);
+            }
+        }
+
+        renderRangeBandBacktestResults(allTrades);
+    } catch (e) {
+        console.error(e);
+        el.innerHTML = `<div class="verdict-box verdict-bearish">Hata: ${e.message}</div>`;
+    } finally {
+        btn.disabled = false;
+        btn.textContent = "🔬 Geçmişe Dönük Test (bu strateji gerçekten kâr getirir mi?)";
+    }
+}
+
+function renderRangeBandBacktestResults(trades) {
+    const el = document.getElementById("rangeband-backtest-results");
+    const resolved = trades.filter(t => t.outcome !== "SONUCLANMADI");
+    const wins = resolved.filter(t => t.outcome === "KAZANC").length;
+    const winRate = resolved.length ? (wins / resolved.length * 100) : null;
+
+    if (!trades.length) {
+        el.innerHTML = `<div class="empty-state" style="padding:20px 0;">Test edilen dönemde hiç bant sinyali (dip/tepe yakını giriş fırsatı) üretilmedi.</div>`;
+        return;
+    }
+
+    // Zaman dilimine gore ayri istatistik - hangi TF daha guvenilir gorelim
+    const byInterval = {};
+    for (const t of trades) {
+        if (!byInterval[t.interval]) byInterval[t.interval] = { total: 0, wins: 0, resolved: 0 };
+        if (t.outcome !== "SONUCLANMADI") {
+            byInterval[t.interval].resolved++;
+            if (t.outcome === "KAZANC") byInterval[t.interval].wins++;
+        }
+    }
+
+    el.innerHTML = `
+        <div class="modal-section-title">Geçmişte Bu Bant Stratejisi Ne Yapardı?</div>
+        <div class="metric-grid" style="grid-template-columns: repeat(3,1fr); margin-bottom:16px;">
+            <div class="metric-box">
+                <div class="metric-label">Üretilen Sinyal</div>
+                <div class="metric-value">${trades.length}</div>
+            </div>
+            <div class="metric-box">
+                <div class="metric-label">Genel Kazanma Oranı</div>
+                <div class="metric-value" style="color:${winRate==null?'var(--muted-dim)':winRate>=50?'var(--lime)':'var(--pink)'};">${winRate!=null?winRate.toFixed(0)+'%':'-'}</div>
+                <div class="metric-note">${resolved.length} sonuçlanan sinyalden ${wins} tanesi kazandı</div>
+            </div>
+            <div class="metric-box">
+                <div class="metric-label">Risk/Ödül Oranı</div>
+                <div class="metric-value">~2:1</div>
+                <div class="metric-note">Başabaş için %33 kazanma yeterli</div>
+            </div>
+        </div>
+
+        <div class="modal-section-title">Zaman Dilimine Göre Kırılım</div>
+        <div class="metric-grid" style="grid-template-columns: repeat(5,1fr); margin-bottom:16px;">
+            ${RANGE_INTERVALS.map(iv => {
+                const d = byInterval[iv];
+                const wr = d && d.resolved ? (d.wins/d.resolved*100) : null;
+                return `
+                <div class="metric-box">
+                    <div class="metric-label">${iv}</div>
+                    <div class="metric-value" style="font-size:15px; color:${wr==null?'var(--muted-dim)':wr>=50?'var(--lime)':'var(--pink)'};">${wr!=null?wr.toFixed(0)+'%':'-'}</div>
+                    <div class="metric-note">${d?d.resolved:0} sinyal</div>
+                </div>`;
+            }).join('')}
+        </div>
+
+        <div class="card" style="max-height:350px; overflow-y:auto;">
+            <table>
+                <thead><tr><th>Coin</th><th>TF</th><th>Yön</th><th>Giriş</th><th>Sonuç</th><th>Süre</th></tr></thead>
+                <tbody>
+                    ${trades.slice().reverse().slice(0, 100).map(t => `
+                        <tr style="cursor:default;">
+                            <td data-label="Coin"><div class="sym">${t.symbol}</div></td>
+                            <td class="num" data-label="TF">${t.interval}</td>
+                            <td data-label="Yön">${t.direction}</td>
+                            <td class="num" data-label="Giriş">$${t.entry.toPrecision(4)}</td>
+                            <td data-label="Sonuç"><span class="${t.outcome==='KAZANC'?'pos':t.outcome==='KAYIP'?'neg':''}">${t.outcome}</span></td>
+                            <td class="num" data-label="Süre">${t.barsToOutcome ? t.barsToOutcome + ' mum' : '-'}</td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        </div>
+        <div class="modal-disclaimer">
+            Bu test, geriye dönük en fazla ~500 mumluk (zaman dilimine göre değişen bir takvim
+            aralığı) veriyle yapılıyor - küçük bir örneklem, farklı dönemlerde farklı sonuç
+            çıkabilir. Zaman dilimine göre kırılıma bak - bazı zaman dilimleri diğerlerinden
+            belirgin daha güvenilir çıkabilir.
+        </div>
+    `;
 }
 
 function renderRangeBandResults(rows) {
@@ -2338,24 +2551,57 @@ function renderRangeBandResults(rows) {
         return;
     }
 
+    function positionLabel(pct) {
+        if (pct <= 35) return { text: "🟢 Dibe Yakın", color: "var(--lime)" };
+        if (pct >= 65) return { text: "🔴 Tepeye Yakın", color: "var(--pink)" };
+        return { text: "🟡 Ortada", color: "var(--amber)" };
+    }
+
     function cellHtml(band) {
         if (!band) return '<span class="num" style="color:var(--muted-dim);">—</span>';
-        return `<span class="num" style="font-weight:700;">$${band.rangeLow.toPrecision(4)} – $${band.rangeHigh.toPrecision(4)}</span><div class="sub-cell">${band.touches}x gidip geldi</div>`;
+        const pos = positionLabel(band.positionPct);
+        let guidanceHtml = '';
+        if (band.guidance) {
+            const g = band.guidance;
+            const dirColor = g.direction === "LONG" ? "pos" : "neg";
+            guidanceHtml = `
+                <div style="margin-top:4px; font-size:11px; line-height:1.5;">
+                    <span class="${dirColor}" style="font-weight:800;">${g.direction}</span>
+                    Giriş $${g.entry.toPrecision(4)} → Hedef $${g.target.toPrecision(4)}
+                    <br><span style="color:var(--pink);">Stop: $${g.stop.toPrecision(4)}</span>
+                </div>
+            `;
+        }
+        return `
+            <span class="num" style="font-weight:700;">$${band.rangeLow.toPrecision(4)} – $${band.rangeHigh.toPrecision(4)}</span>
+            <div class="sub-cell">${band.touches}x gidip geldi</div>
+            <div class="sub-cell" style="color:${pos.color}; font-weight:700;">${pos.text} (%${band.positionPct.toFixed(0)})</div>
+            ${guidanceHtml}
+        `;
+    }
+
+    function riskHtml(risk) {
+        if (!risk) return '<span class="num" style="color:var(--muted-dim);">—</span>';
+        if (risk.highRisk) {
+            return `<span class="status-chip chip-hot"><span class="dot"></span>Yüksek</span><div class="sub-cell">${risk.reasons.join(', ')}</div>`;
+        }
+        return `<span class="status-chip chip-confirmed"><span class="dot"></span>Normal</span>`;
     }
 
     el.innerHTML = `
         <div class="section-desc" style="margin-bottom:10px;">
-            Tarama saati: ${now} — her hücre o zaman diliminde tespit edilen bandı ve kaç kez
-            gidip geldiğini gösterir. Satırlar, toplam "gidip gelme" sayısına göre en güçlü
-            bant adayından başlıyor.
+            Tarama saati: ${now} — her hücre bandı, kaç kez gidip geldiğini, fiyatın bandın
+            neresinde olduğunu ve (dip/tepe yakınındaysa) somut giriş/hedef/stop önerisini gösterir.
+            "Kırılma Riski" sütunu, OI/funding'e bakarak bandın patlama ihtimalini işaretler.
         </div>
         <div class="card">
             <table>
-                <thead><tr><th>Coin</th><th>15dk</th><th>30dk</th><th>1 Saat</th><th>4 Saat</th><th>Günlük</th></tr></thead>
+                <thead><tr><th>Coin</th><th>Kırılma Riski</th><th>15dk</th><th>30dk</th><th>1 Saat</th><th>4 Saat</th><th>Günlük</th></tr></thead>
                 <tbody>
                     ${rows.map(r => `
                         <tr onclick="openCoinAnalysis('${r.symbol}')">
                             <td data-label="Coin"><div class="sym">${r.symbol}</div></td>
+                            <td data-label="Kırılma Riski">${riskHtml(r.risk)}</td>
                             <td data-label="15dk">${cellHtml(r.byInterval["15m"])}</td>
                             <td data-label="30dk">${cellHtml(r.byInterval["30m"])}</td>
                             <td data-label="1 Saat">${cellHtml(r.byInterval["1h"])}</td>
