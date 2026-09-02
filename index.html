@@ -358,6 +358,7 @@
                 </div>
             </div>
             <div class="icon-actions">
+                <button class="icon-btn" onclick="openRangeBandInNewTab()">📊 Bant İçi (Range) Coinler ↗</button>
                 <button class="icon-btn" onclick="openFollowLineInNewTab()">📈 Follow Line Sinyalleri ↗</button>
                 <button class="icon-btn" onclick="openScalpPage()">⚡ Hızlı Fırsat Taraması</button>
                 <button class="icon-btn" onclick="exportAllData(this)">⬇ Dışa Aktar</button>
@@ -503,6 +504,14 @@
     <div class="modal-box">
         <button class="modal-close" onclick="closeOptimizerPanel()">×</button>
         <div id="optimizer-content"></div>
+    </div>
+</div>
+
+<!-- Bant Ici (Range) Coinler - CANLI, saklanmiyor -->
+<div class="modal-overlay" id="rangeband-overlay" onclick="if(event.target===this) closeRangeBandPage()">
+    <div class="modal-box" style="max-width: 1300px; width: 96vw;">
+        <button class="modal-close" onclick="closeRangeBandPage()">×</button>
+        <div id="rangeband-content"></div>
     </div>
 </div>
 
@@ -2192,7 +2201,175 @@ function computeSqueezeMomentum(klines, bbLength = 20, bbMult = 2.0, kcLength = 
 
 
 
-function closeFollowLinePage() { document.getElementById("followline-overlay").classList.remove("open"); }
+// ================= BANT ICI (RANGE) COINLER - CANLI, saklanmiyor =================
+// Amac: fiyati SABIT bir aralikta (destek-direnc bandinda) tekrar tekrar gidip gelen
+// coinleri bulmak - bunlar range/kanal trade'i (future ile tekrarli al-sat) icin uygundur.
+// Trend takip eden veya patlayan coinlerin TAM TERSI bir profil ariyoruz burada.
+
+const RANGE_INTERVALS = ["15m", "30m", "1h", "4h", "1d"];
+const RANGE_UNIVERSE_SIZE = 60;
+const RANGE_ZONE_PCT = 0.15;      // ust/alt %15'lik bolgeye deginme "bant testi" sayilir
+const RANGE_MAX_WIDTH_PCT = 40;   // aralik (yuksek-dusuk)/dusuk yuzdesi bunun altinda olmali (cok genisse "bant" degil trend'dir)
+const RANGE_MIN_TOUCHES = 3;      // en az kac kere gidip gelmis olmali
+
+/** Bir zaman diliminin mum verisinde "sabit bant icinde gidip gelme" var mi diye bakar. */
+function detectRangeBand(klines) {
+    if (klines.length < 20) return null;
+    const highs = klines.map(k => k.high);
+    const lows = klines.map(k => k.low);
+    const closes = klines.map(k => k.close);
+
+    const rangeHigh = Math.max(...highs);
+    const rangeLow = Math.min(...lows);
+    if (rangeLow <= 0) return null;
+
+    const widthPct = (rangeHigh - rangeLow) / rangeLow * 100;
+    if (widthPct > RANGE_MAX_WIDTH_PCT) return null; // cok genis - bu bir bant degil, trend
+
+    const topThreshold = rangeLow + (1 - RANGE_ZONE_PCT) * (rangeHigh - rangeLow);
+    const bottomThreshold = rangeLow + RANGE_ZONE_PCT * (rangeHigh - rangeLow);
+
+    let state = null, touches = 0;
+    for (const c of closes) {
+        if (c >= topThreshold) {
+            if (state !== "TOP") { touches++; state = "TOP"; }
+        } else if (c <= bottomThreshold) {
+            if (state !== "BOTTOM") { touches++; state = "BOTTOM"; }
+        }
+        // orta bolgedeyse durum degismez - ayni kenara art arda deginmeyi tekrar saymamak icin
+    }
+
+    if (touches < RANGE_MIN_TOUCHES) return null;
+
+    const lastClose = closes[closes.length - 1];
+    const stillInRange = lastClose <= rangeHigh * 1.02 && lastClose >= rangeLow * 0.98;
+    if (!stillInRange) return null; // banttan yeni kirilmissa artik "aktif bant" sayma
+
+    return { rangeHigh, rangeLow, widthPct, touches, lastClose };
+}
+
+function closeRangeBandPage() { document.getElementById("rangeband-overlay").classList.remove("open"); }
+
+function openRangeBandInNewTab() {
+    const url = window.location.origin + window.location.pathname + "#rangeband";
+    window.open(url, "_blank");
+}
+
+function openRangeBandPage() {
+    const overlay = document.getElementById("rangeband-overlay");
+    overlay.classList.add("open");
+    document.getElementById("rangeband-content").innerHTML = `
+        <div class="modal-title">📊 Bant İçi (Range) Coinler</div>
+        <div class="modal-subtitle">
+            Fiyatı sabit bir aralıkta (destek-direnç bandında) <strong>tekrar tekrar</strong> gidip
+            gelen coinleri bulur — bunlar range/kanal trade'i (bandın altından al, üstünden sat,
+            tekrarla) için uygun adaylardır. Trend yapan ya da patlayan coinlerin tam tersi bir
+            profil aranır. 5 farklı zaman diliminde (15dk/30dk/1s/4s/günlük) ayrı ayrı kontrol edilir.
+        </div>
+        <button id="run-rangeband-btn" onclick="runRangeBandScan()" style="width:100%; padding:14px; background:var(--amber); color:#000; border:none; border-radius:10px; font-weight:800; cursor:pointer; margin-bottom:16px;">▶ Şimdi Tara (~2-3 dakika sürer)</button>
+        <div id="rangeband-results"></div>
+        <div class="modal-disclaimer" style="margin-top:16px;">
+            Bu bir yatırım tavsiyesi değildir. Geçmişte bant içinde kalmış olmak, gelecekte de öyle
+            kalacağı anlamına gelmez — bir haber/olay bandı her an kırabilir. Kaldıraçlı (futures)
+            işlemlerde band kırılırsa hızlı zarar riski vardır, stop-loss kullanmayı ihmal etme.
+        </div>
+    `;
+}
+
+async function runRangeBandScan() {
+    const btn = document.getElementById("run-rangeband-btn");
+    const el = document.getElementById("rangeband-results");
+    btn.disabled = true;
+    btn.textContent = "⏳ Taranıyor...";
+    el.innerHTML = '<div class="modal-loading">⏳ En likit coinler belirleniyor...</div>';
+
+    try {
+        const tickers = await fetch24hrTickers();
+        tickers.sort((a, b) => b.volume - a.volume);
+        const universe = tickers.filter(t => isCryptoSymbol(t.symbol)).slice(0, RANGE_UNIVERSE_SIZE);
+
+        const rows = [];
+        let done = 0;
+        for (const t of universe) {
+            done++;
+            el.innerHTML = `<div class="modal-loading">⏳ Taranıyor... (${done}/${universe.length}) — ${t.symbol}</div>`;
+            const byInterval = {};
+            let anyBand = false, totalTouches = 0;
+
+            for (const interval of RANGE_INTERVALS) {
+                byInterval[interval] = null;
+                try {
+                    const klines = await fetchScalpKlines(t.symbol, interval, 80);
+                    const band = detectRangeBand(klines);
+                    if (band) {
+                        byInterval[interval] = band;
+                        anyBand = true;
+                        totalTouches += band.touches;
+                    }
+                } catch (e) { console.warn(t.symbol, interval, "hata:", e.message); }
+                await sleep(50);
+            }
+
+            if (anyBand) rows.push({ symbol: t.symbol, byInterval, totalTouches });
+        }
+
+        rows.sort((a, b) => b.totalTouches - a.totalTouches);
+        renderRangeBandResults(rows);
+    } catch (e) {
+        console.error(e);
+        el.innerHTML = `<div class="verdict-box verdict-bearish">Hata: ${e.message}</div>`;
+    } finally {
+        btn.disabled = false;
+        btn.textContent = "▶ Şimdi Tara (~2-3 dakika sürer)";
+    }
+}
+
+function renderRangeBandResults(rows) {
+    const el = document.getElementById("rangeband-results");
+    const now = new Date().toLocaleTimeString('tr-TR');
+
+    if (!rows.length) {
+        el.innerHTML = `
+            <div class="empty-state" style="padding:30px 0;">
+                <span class="big-emoji">◎</span>Şu an belirgin bir bant içinde gidip gelen coin
+                bulunamadı (${now}). Piyasa geneli trend yapıyor olabilir.
+            </div>
+        `;
+        return;
+    }
+
+    function cellHtml(band) {
+        if (!band) return '<span class="num" style="color:var(--muted-dim);">—</span>';
+        return `<span class="num" style="font-weight:700;">$${band.rangeLow.toPrecision(4)} – $${band.rangeHigh.toPrecision(4)}</span><div class="sub-cell">${band.touches}x gidip geldi</div>`;
+    }
+
+    el.innerHTML = `
+        <div class="section-desc" style="margin-bottom:10px;">
+            Tarama saati: ${now} — her hücre o zaman diliminde tespit edilen bandı ve kaç kez
+            gidip geldiğini gösterir. Satırlar, toplam "gidip gelme" sayısına göre en güçlü
+            bant adayından başlıyor.
+        </div>
+        <div class="card">
+            <table>
+                <thead><tr><th>Coin</th><th>15dk</th><th>30dk</th><th>1 Saat</th><th>4 Saat</th><th>Günlük</th></tr></thead>
+                <tbody>
+                    ${rows.map(r => `
+                        <tr onclick="openCoinAnalysis('${r.symbol}')">
+                            <td data-label="Coin"><div class="sym">${r.symbol}</div></td>
+                            <td data-label="15dk">${cellHtml(r.byInterval["15m"])}</td>
+                            <td data-label="30dk">${cellHtml(r.byInterval["30m"])}</td>
+                            <td data-label="1 Saat">${cellHtml(r.byInterval["1h"])}</td>
+                            <td data-label="4 Saat">${cellHtml(r.byInterval["4h"])}</td>
+                            <td data-label="Günlük">${cellHtml(r.byInterval["1d"])}</td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        </div>
+    `;
+}
+
+
 
 /** "Follow Line Sinyalleri"ni AYRI bir tarayici sekmesinde acar - ayni sayfanin
  * tamamini (kod tekrari olmadan) yeniden yukler, sadece #followline isareti sayesinde
@@ -2202,6 +2379,8 @@ function openFollowLineInNewTab() {
     const url = window.location.origin + window.location.pathname + "#followline";
     window.open(url, "_blank");
 }
+
+function closeFollowLinePage() { document.getElementById("followline-overlay").classList.remove("open"); }
 
 function openFollowLinePage() {
     const overlay = document.getElementById("followline-overlay");
@@ -3159,6 +3338,14 @@ if (window.location.hash === "#followline") {
     setTimeout(() => {
         openFollowLinePage();
         setTimeout(() => runFollowLineScan(), 200);
+    }, 300);
+}
+
+// URL'de #rangeband varsa, bant ici coin sayfasini otomatik ac ve taramayi baslat
+if (window.location.hash === "#rangeband") {
+    setTimeout(() => {
+        openRangeBandPage();
+        setTimeout(() => runRangeBandScan(), 200);
     }, 300);
 }
 
