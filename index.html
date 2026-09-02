@@ -515,6 +515,14 @@
     </div>
 </div>
 
+<!-- Tek Coin Backtest Sonucu (Bant Ici sayfasindaki "Test Et" butonundan acilir) -->
+<div class="modal-overlay" id="coin-backtest-overlay" onclick="if(event.target===this) closeCoinBacktestModal()">
+    <div class="modal-box" style="max-width: 900px; width: 95vw;">
+        <button class="modal-close" onclick="closeCoinBacktestModal()">×</button>
+        <div id="coin-backtest-content"></div>
+    </div>
+</div>
+
 <!-- Follow Line Sinyalleri (Bollinger+ATR trend takip cizgisi) - CANLI, saklanmiyor -->
 <div class="modal-overlay" id="followline-overlay" onclick="if(event.target===this) closeFollowLinePage()">
     <div class="modal-box" style="max-width: 1200px; width: 95vw;">
@@ -2394,6 +2402,76 @@ async function runRangeBandScan() {
  * gercekten kar getirip getirmedigini olcen tek gercek yontemdir - simdiye kadar bunu hic
  * olcmemistik (dip sinyalinde yasadigimiz "aslinda rastgele" hatasini burada tekrarlamayalim diye).
  */
+const RANGE_BACKTEST_LOOKBACK = 80;   // her anda geriye donuk kac mumla bant arayacagiz (canli taramayla ayni)
+const RANGE_BACKTEST_FORWARD = 20;    // sinyal sonrasi en fazla kac mum ileriye bakip sonucu kontrol edecegiz
+
+/**
+ * BACKTEST CEKIRDEGI - hem genel (coklu coin) test hem TEK COIN testi AYNI bu fonksiyonu
+ * kullanir (celiski olmasin diye tek kaynak). onProgress(text) ile ilerleme bildirilir.
+ */
+async function backtestRangeBandForSymbols(symbols, onProgress) {
+    const allTrades = [];
+    let done = 0;
+    const total = symbols.length * RANGE_INTERVALS.length;
+
+    for (const symbol of symbols) {
+        for (const interval of RANGE_INTERVALS) {
+            done++;
+            if (onProgress) onProgress(`⏳ Test ediliyor... (${done}/${total}) — ${symbol} ${interval}`);
+            try {
+                const klines = await fetchScalpKlines(symbol, interval, 500);
+                let i = RANGE_BACKTEST_LOOKBACK;
+                while (i < klines.length - RANGE_BACKTEST_FORWARD) {
+                    const window = klines.slice(i - RANGE_BACKTEST_LOOKBACK + 1, i + 1);
+                    const band = detectRangeBand(window);
+
+                    if (band && band.guidance) {
+                        const g = band.guidance;
+                        let outcome = "SONUCLANMADI", barsToOutcome = null;
+                        for (let j = i + 1; j <= i + RANGE_BACKTEST_FORWARD && j < klines.length; j++) {
+                            const bar = klines[j];
+                            if (g.direction === "LONG") {
+                                if (bar.low <= g.stop) { outcome = "KAYIP"; barsToOutcome = j - i; break; }
+                                if (bar.high >= g.target) { outcome = "KAZANC"; barsToOutcome = j - i; break; }
+                            } else {
+                                if (bar.high >= g.stop) { outcome = "KAYIP"; barsToOutcome = j - i; break; }
+                                if (bar.low <= g.target) { outcome = "KAZANC"; barsToOutcome = j - i; break; }
+                            }
+                        }
+                        allTrades.push({ symbol, interval, direction: g.direction, entry: g.entry, outcome, barsToOutcome });
+                        i += RANGE_BACKTEST_FORWARD; // ayni sinyali tekrar tekrar saymamak icin ileri atla
+                    } else {
+                        i++;
+                    }
+                }
+            } catch (e) { console.warn(symbol, interval, "backtest hatasi:", e.message); }
+            await sleep(50);
+        }
+    }
+    return allTrades;
+}
+
+function closeCoinBacktestModal() { document.getElementById("coin-backtest-overlay").classList.remove("open"); }
+
+/** Sadece TEK bir coin icin backtest calistirir - Bant Ici tablosundaki "Test Et" butonundan tetiklenir. */
+async function runSingleCoinBacktest(symbol) {
+    const overlay = document.getElementById("coin-backtest-overlay");
+    const content = document.getElementById("coin-backtest-content");
+    overlay.classList.add("open");
+    content.innerHTML = `<div class="modal-title">🔬 ${symbol} — Bant Geçmişi Testi</div><div class="modal-loading">⏳ Test ediliyor...</div>`;
+
+    try {
+        const trades = await backtestRangeBandForSymbols([symbol], (text) => {
+            content.innerHTML = `<div class="modal-title">🔬 ${symbol} — Bant Geçmişi Testi</div><div class="modal-loading">${text}</div>`;
+        });
+        content.innerHTML = `<div class="modal-title">🔬 ${symbol} — Bant Geçmişi Testi</div><div id="single-coin-backtest-inner"></div>`;
+        renderRangeBandBacktestResults(trades, document.getElementById("single-coin-backtest-inner"));
+    } catch (e) {
+        console.error(e);
+        content.innerHTML = `<div class="modal-title">🔬 ${symbol} — Bant Geçmişi Testi</div><div class="verdict-box verdict-bearish">Hata: ${e.message}</div>`;
+    }
+}
+
 async function runRangeBandBacktest() {
     const btn = document.getElementById("run-rangeband-backtest-btn");
     const el = document.getElementById("rangeband-backtest-results");
@@ -2401,53 +2479,15 @@ async function runRangeBandBacktest() {
     btn.textContent = "⏳ Test ediliyor...";
     el.innerHTML = '<div class="modal-loading">⏳ En likit coinler belirleniyor...</div>';
 
-    const LOOKBACK_WINDOW = 80;   // her anda geriye donuk kac mumla bant arayacagiz (canli taramayla ayni)
-    const FORWARD_WINDOW = 20;    // sinyal sonrasi en fazla kac mum ileriye bakip sonucu kontrol edecegiz
     const BACKTEST_COIN_COUNT = 8; // testi hizli tutmak icin daha az coin
 
     try {
         const tickers = await fetch24hrTickers();
         const testSymbols = tickers.filter(t => isCryptoSymbol(t.symbol))
-            .sort((a, b) => b.volume - a.volume).slice(0, BACKTEST_COIN_COUNT);
+            .sort((a, b) => b.volume - a.volume).slice(0, BACKTEST_COIN_COUNT).map(t => t.symbol);
 
-        const allTrades = [];
-        let done = 0;
-        for (const t of testSymbols) {
-            for (const interval of RANGE_INTERVALS) {
-                done++;
-                el.innerHTML = `<div class="modal-loading">⏳ Test ediliyor... (${done}/${testSymbols.length * RANGE_INTERVALS.length}) — ${t.symbol} ${interval}</div>`;
-                try {
-                    const klines = await fetchScalpKlines(t.symbol, interval, 500);
-                    let i = LOOKBACK_WINDOW;
-                    while (i < klines.length - FORWARD_WINDOW) {
-                        const window = klines.slice(i - LOOKBACK_WINDOW + 1, i + 1);
-                        const band = detectRangeBand(window);
-
-                        if (band && band.guidance) {
-                            const g = band.guidance;
-                            let outcome = "SONUCLANMADI", barsToOutcome = null;
-                            for (let j = i + 1; j <= i + FORWARD_WINDOW && j < klines.length; j++) {
-                                const bar = klines[j];
-                                if (g.direction === "LONG") {
-                                    if (bar.low <= g.stop) { outcome = "KAYIP"; barsToOutcome = j - i; break; }
-                                    if (bar.high >= g.target) { outcome = "KAZANC"; barsToOutcome = j - i; break; }
-                                } else {
-                                    if (bar.high >= g.stop) { outcome = "KAYIP"; barsToOutcome = j - i; break; }
-                                    if (bar.low <= g.target) { outcome = "KAZANC"; barsToOutcome = j - i; break; }
-                                }
-                            }
-                            allTrades.push({ symbol: t.symbol, interval, direction: g.direction, entry: g.entry, outcome, barsToOutcome });
-                            i += FORWARD_WINDOW; // ayni sinyali tekrar tekrar saymamak icin ileri atla
-                        } else {
-                            i++;
-                        }
-                    }
-                } catch (e) { console.warn(t.symbol, interval, "backtest hatasi:", e.message); }
-                await sleep(50);
-            }
-        }
-
-        renderRangeBandBacktestResults(allTrades);
+        const allTrades = await backtestRangeBandForSymbols(testSymbols, (text) => { el.innerHTML = `<div class="modal-loading">${text}</div>`; });
+        renderRangeBandBacktestResults(allTrades, el);
     } catch (e) {
         console.error(e);
         el.innerHTML = `<div class="verdict-box verdict-bearish">Hata: ${e.message}</div>`;
@@ -2457,8 +2497,8 @@ async function runRangeBandBacktest() {
     }
 }
 
-function renderRangeBandBacktestResults(trades) {
-    const el = document.getElementById("rangeband-backtest-results");
+function renderRangeBandBacktestResults(trades, targetEl) {
+    const el = targetEl || document.getElementById("rangeband-backtest-results");
     const resolved = trades.filter(t => t.outcome !== "SONUCLANMADI");
     const wins = resolved.filter(t => t.outcome === "KAZANC").length;
     const winRate = resolved.length ? (wins / resolved.length * 100) : null;
@@ -2596,11 +2636,12 @@ function renderRangeBandResults(rows) {
         </div>
         <div class="card">
             <table>
-                <thead><tr><th>Coin</th><th>Kırılma Riski</th><th>15dk</th><th>30dk</th><th>1 Saat</th><th>4 Saat</th><th>Günlük</th></tr></thead>
+                <thead><tr><th>Coin</th><th></th><th>Kırılma Riski</th><th>15dk</th><th>30dk</th><th>1 Saat</th><th>4 Saat</th><th>Günlük</th></tr></thead>
                 <tbody>
                     ${rows.map(r => `
                         <tr onclick="openCoinAnalysis('${r.symbol}')">
                             <td data-label="Coin"><div class="sym">${r.symbol}</div></td>
+                            <td data-label=""><button onclick="event.stopPropagation(); runSingleCoinBacktest('${r.symbol}')" style="background:var(--bg-elev); border:1px solid var(--border); color:var(--text); padding:6px 10px; border-radius:8px; font-size:11px; font-weight:700; cursor:pointer; white-space:nowrap;">🔬 Test Et</button></td>
                             <td data-label="Kırılma Riski">${riskHtml(r.risk)}</td>
                             <td data-label="15dk">${cellHtml(r.byInterval["15m"])}</td>
                             <td data-label="30dk">${cellHtml(r.byInterval["30m"])}</td>
