@@ -358,14 +358,10 @@
                 </div>
             </div>
             <div class="icon-actions">
-                <button class="icon-btn" onclick="openRangeBandInNewTab()">📊 Bant İçi (Range) Coinler ↗</button>
+                <button class="icon-btn" onclick="openAdvRangeInNewTab()">🔬 Gelişmiş Bant Analizi ↗</button>
                 <button class="icon-btn" onclick="openFollowLineInNewTab()">📈 Follow Line Sinyalleri ↗</button>
-                <button class="icon-btn" onclick="openScalpPage()">⚡ Hızlı Fırsat Taraması</button>
                 <button class="icon-btn" onclick="exportAllData(this)">⬇ Dışa Aktar</button>
-                <button class="icon-btn" id="dip-nav-btn" onclick="openDipPage()" style="position:relative;">📉 Dip Toparlanma<span id="dip-badge" class="nav-badge" style="display:none;"></span></button>
                 <button class="icon-btn" onclick="openDatabasePage()">📚 Coin Veritabanı</button>
-                <button class="icon-btn" onclick="openOptimizerPanel()">🔬 Eşik Optimizasyonu</button>
-                <button class="icon-btn" onclick="openStatsPanel()">📊 Başarı Oranı</button>
                 <button class="icon-btn" onclick="recalcSignals()">↻ Yeniden hesapla</button>
                 <button class="icon-btn" onclick="clearAll()">⌫ Sıfırla</button>
                 <button id="scan-btn" onclick="runScan()">▶ Bugünü Tara</button>
@@ -381,7 +377,7 @@
         </div>
     </header>
 
-    <div class="section">
+    <div class="section" style="display:none;">
         <div class="section-head">
             <h2>🎯 Yakında Patlayabilecek Coinler</h2>
             <span class="count-chip" id="watching-count">0 aday</span>
@@ -409,7 +405,7 @@
         </div>
     </div>
 
-    <div class="section">
+    <div class="section" style="display:none;">
         <div class="section-head">
             <h2>📈 Bugünün En Çok Artanları</h2>
             <span class="count-chip" id="top30-date-chip">-</span>
@@ -425,7 +421,7 @@
         </div>
     </div>
 
-    <div class="section">
+    <div class="section" style="display:none;">
         <div class="section-head">
             <h2>✓ Doğrulanmış Tahminler</h2>
             <span class="count-chip" id="confirmed-count">0 kayıt</span>
@@ -441,8 +437,34 @@
         </div>
     </div>
 
+    <!-- ================= ANA SAYFA: BANT ICI (RANGE) COINLER ================= -->
+    <div class="section">
+        <div class="section-head">
+            <h2>📊 Bant İçi (Range) Coinler</h2>
+            <span class="count-chip" id="rangeband-count-chip"></span>
+        </div>
+        <div class="section-desc">
+            Fiyatı sabit bir aralıkta (destek-direnç bandında) <strong>tekrar tekrar</strong> gidip
+            gelen coinleri bulur — bunlar range/kanal trade'i (bandın altından al, üstünden sat,
+            tekrarla) için uygun adaylardır. 5 farklı zaman diliminde (15dk/30dk/1s/4s/günlük) ayrı
+            ayrı kontrol edilir. Her hücre bandı, kaç kez gidip geldiğini, fiyatın bandın neresinde
+            olduğunu ve (dip/tepe yakınındaysa) somut giriş/hedef/stop önerisini gösterir.
+        </div>
+        <button id="run-rangeband-btn" onclick="runRangeBandScan()" style="width:100%; padding:14px; background:var(--amber); color:#000; border:none; border-radius:10px; font-weight:800; cursor:pointer; margin-bottom:10px;">▶ Şimdi Tara (~2-3 dakika sürer)</button>
+        <button id="run-rangeband-backtest-btn" onclick="runRangeBandBacktest()" style="width:100%; padding:12px; background:var(--bg-elev); color:var(--text); border:2px solid var(--border); border-radius:10px; font-weight:700; cursor:pointer; margin-bottom:16px;">🔬 Geçmişe Dönük Test (bu strateji gerçekten kâr getirir mi?)</button>
+        <div id="rangeband-backtest-results"></div>
+        <div id="rangeband-results">
+            <div class="empty-state"><span class="big-emoji">◎</span>Henüz taranmadı. "Şimdi Tara" butonuna bas.</div>
+        </div>
+        <div class="modal-disclaimer" style="margin-top:16px; padding:0 4px;">
+            Bu bir yatırım tavsiyesi değildir. Geçmişte bant içinde kalmış olmak, gelecekte de öyle
+            kalacağı anlamına gelmez — bir haber/olay bandı her an kırabilir. Kaldıraçlı (futures)
+            işlemlerde bant kırılırsa hızlı zarar riski vardır, stop-loss kullanmayı ihmal etme.
+        </div>
+    </div>
+
     <details class="advanced">
-        <summary>⚙ İleri düzey ayarlar</summary>
+        <summary>⚙ İleri düzey ayarlar (arka planda çalışan patlama tespit sistemi için)</summary>
         <div class="settings-grid">
             <label style="grid-column: 1 / -1; flex-direction: row; align-items: center; gap: 8px;">
                 <input id="cfg-use-dynamic" type="checkbox" checked style="width:auto;">
@@ -462,15 +484,14 @@
         </div>
     </details>
 
-    <details class="advanced">
-        <summary>⚙ Dip Toparlanma ayarları (küçük ölçekli, tekrarlayan salınımlar için)</summary>
-        <div class="settings-grid">
-            <label>Düşüş eşiği (%) - kaç gün içinde ne kadar düşerse "dip" sayılsın<input id="cfg-dip-decline" type="number" value="20"></label>
-            <label>Düşüş penceresi (gün)<input id="cfg-dip-lookback" type="number" value="2"></label>
-            <label>Toparlanma eşiği (%) - dip noktasından ne kadar sıçrarsa "toparlandı" sayılsın<input id="cfg-dip-recovery" type="number" value="20"></label>
-            <label>Toparlanma penceresi (gün)<input id="cfg-dip-recovery-window" type="number" value="2"></label>
-        </div>
-    </details>
+    <!-- Dip Toparlanma ayarlari (input alanlari getConfig() tarafindan hala okunuyor olabilir,
+         gizli kalsinlar ki JS hata vermesin, ama kullaniciya gosterilmiyor) -->
+    <div style="display:none;">
+        <input id="cfg-dip-decline" type="number" value="20">
+        <input id="cfg-dip-lookback" type="number" value="2">
+        <input id="cfg-dip-recovery" type="number" value="20">
+        <input id="cfg-dip-recovery-window" type="number" value="2">
+    </div>
 
     <footer class="disclaimer">
         Bu bir yatırım tavsiyesi değildir, sadece geçmiş fiyat hareketlerine bakan bir izleme aracıdır.
@@ -491,35 +512,19 @@
     </div>
 </div>
 
-<!-- Basari Orani Paneli -->
-<div class="modal-overlay" id="stats-overlay" onclick="if(event.target===this) closeStatsPanel()">
-    <div class="modal-box">
-        <button class="modal-close" onclick="closeStatsPanel()">×</button>
-        <div id="stats-content"></div>
-    </div>
-</div>
-
-<!-- Esik Optimizasyonu Paneli -->
-<div class="modal-overlay" id="optimizer-overlay" onclick="if(event.target===this) closeOptimizerPanel()">
-    <div class="modal-box">
-        <button class="modal-close" onclick="closeOptimizerPanel()">×</button>
-        <div id="optimizer-content"></div>
-    </div>
-</div>
-
-<!-- Bant Ici (Range) Coinler - CANLI, saklanmiyor -->
-<div class="modal-overlay" id="rangeband-overlay" onclick="if(event.target===this) closeRangeBandPage()">
-    <div class="modal-box" style="max-width: 1300px; width: 96vw;">
-        <button class="modal-close" onclick="closeRangeBandPage()">×</button>
-        <div id="rangeband-content"></div>
-    </div>
-</div>
-
 <!-- Tek Coin Backtest Sonucu (Bant Ici sayfasindaki "Test Et" butonundan acilir) -->
 <div class="modal-overlay" id="coin-backtest-overlay" onclick="if(event.target===this) closeCoinBacktestModal()">
     <div class="modal-box" style="max-width: 900px; width: 95vw;">
         <button class="modal-close" onclick="closeCoinBacktestModal()">×</button>
         <div id="coin-backtest-content"></div>
+    </div>
+</div>
+
+<!-- Gelismis Bant Analizi (POC, CVD, Sikisma Suresi, RSI Uyumsuzlugu, Emir Defteri) - CANLI, ayri, eski Bant Ici sayfasina dokunmaz -->
+<div class="modal-overlay" id="advrange-overlay" onclick="if(event.target===this) closeAdvRangePage()">
+    <div class="modal-box" style="max-width: 1400px; width: 96vw;">
+        <button class="modal-close" onclick="closeAdvRangePage()">×</button>
+        <div id="advrange-content"></div>
     </div>
 </div>
 
@@ -531,27 +536,11 @@
     </div>
 </div>
 
-<!-- Hizli Firsat Taramasi (Scalping) - CANLI, saklanmiyor, her seferinde taze taranir -->
-<div class="modal-overlay" id="scalp-overlay" onclick="if(event.target===this) closeScalpPage()">
-    <div class="modal-box" style="max-width: 1200px; width: 95vw;">
-        <button class="modal-close" onclick="closeScalpPage()">×</button>
-        <div id="scalp-content"></div>
-    </div>
-</div>
-
 <!-- Coin Veritabani Sayfasi (tam listeli, gun gun detay) -->
 <div class="modal-overlay" id="database-overlay" onclick="if(event.target===this) closeDatabasePage()">
     <div class="modal-box" style="max-width: 1200px; width: 95vw;">
         <button class="modal-close" onclick="closeDatabasePage()">×</button>
         <div id="database-content"></div>
-    </div>
-</div>
-
-<!-- Dip Toparlanma Sayfasi (kucuk olcekli, tekrarlayan salinim sinyalleri) -->
-<div class="modal-overlay" id="dip-overlay" onclick="if(event.target===this) closeDipPage()">
-    <div class="modal-box" style="max-width: 1100px; width: 95vw;">
-        <button class="modal-close" onclick="closeDipPage()">×</button>
-        <div id="dip-content"></div>
     </div>
 </div>
 
@@ -1043,8 +1032,6 @@ async function recalcSignals() {
 
     const btcMap = new Map(Object.entries(btcKlinesStore));
     const signals = {};
-    const dipSignals = {};
-    const previousDipSignals = await store.get(KEYS.dipSignals, {});
 
     for (const symbol of Object.keys(klinesStore)) {
         const dateMap = klinesStore[symbol];
@@ -1056,19 +1043,11 @@ async function recalcSignals() {
 
         const symbolSignals = detectSignalsForSymbol(symbol, rows, btcMap, cfg, previousSignals);
         Object.assign(signals, symbolSignals);
-
-        // Kucuk olcekli, tekrarlayan dus-cik (dip toparlanma) sinyalleri - gunluk cozunurlukte,
-        // buyuk patlama tespitinden TAMAMEN BAGIMSIZ ayrica hesaplanir.
-        const dailyRows = resampleToDailyFull(rows);
-        const symbolDipSignals = detectDipSignalsForSymbol(symbol, dailyRows, cfg, previousDipSignals);
-        Object.assign(dipSignals, symbolDipSignals);
     }
 
     await store.set(KEYS.signals, signals);
-    await store.set(KEYS.dipSignals, dipSignals);
     await renderSignals();
-    await updateDipBadge();
-    showFreshNotifications(previousSignals, signals, previousDipSignals, dipSignals);
+    showFreshNotifications(previousSignals, signals);
 }
 
 /**
@@ -1081,7 +1060,7 @@ async function recalcSignals() {
  * ait yuzlerce "basari"yi az önce olmus gibi sunmak). Bu yuzden sadece ONCEKI TARAMADA
  * FARKLI DURUMDA olan (yani gercekten BU taramada degisen) kayitlari "taze" sayiyoruz.
  */
-function showFreshNotifications(prevSignals, newSignals, prevDipSignals, newDipSignals) {
+function showFreshNotifications(prevSignals, newSignals) {
     const newlyConfirmedMain = [];
     const newlyWatchingMain = [];
     for (const [key, sig] of Object.entries(newSignals)) {
@@ -1090,15 +1069,7 @@ function showFreshNotifications(prevSignals, newSignals, prevDipSignals, newDipS
         else if (prev && prev.status === "WATCHING" && sig.status === "CONFIRMED") newlyConfirmedMain.push(sig);
     }
 
-    const newlyConfirmedDip = [];
-    const newlyWatchingDip = [];
-    for (const [key, sig] of Object.entries(newDipSignals)) {
-        const prev = prevDipSignals[key];
-        if (!prev && sig.status === "WATCHING") newlyWatchingDip.push(sig);
-        else if (prev && prev.status === "WATCHING" && sig.status === "CONFIRMED") newlyConfirmedDip.push(sig);
-    }
-
-    const totalNews = newlyConfirmedMain.length + newlyWatchingMain.length + newlyConfirmedDip.length + newlyWatchingDip.length;
+    const totalNews = newlyConfirmedMain.length + newlyWatchingMain.length;
     const banner = document.getElementById("fresh-notification-banner");
     if (!banner) return;
 
@@ -1108,13 +1079,12 @@ function showFreshNotifications(prevSignals, newSignals, prevDipSignals, newDipS
     }
 
     let html = "";
-    if (newlyConfirmedMain.length || newlyConfirmedDip.length) {
-        const items = [...newlyConfirmedMain.map(s => `${s.symbol} (+${s.reentryPct.toFixed(1)}%)`),
-                        ...newlyConfirmedDip.map(s => `${s.symbol} (+${s.recoveryPct.toFixed(1)}%)`)];
+    if (newlyConfirmedMain.length) {
+        const items = newlyConfirmedMain.map(s => `${s.symbol} (+${s.reentryPct.toFixed(1)}%)`);
         html += `<div>🎉 <strong>Az önce doğrulandı:</strong> ${items.join(', ')}</div>`;
     }
-    if (newlyWatchingMain.length || newlyWatchingDip.length) {
-        const items = [...newlyWatchingMain.map(s => s.symbol), ...newlyWatchingDip.map(s => s.symbol)];
+    if (newlyWatchingMain.length) {
+        const items = newlyWatchingMain.map(s => s.symbol);
         html += `<div>🆕 <strong>Yeni aday (bu taramada ilk kez):</strong> ${items.join(', ')}</div>`;
     }
     banner.innerHTML = html + `<button onclick="document.getElementById('fresh-notification-banner').style.display='none'" style="margin-top:8px; background:none; border:1px solid var(--border); color:var(--muted); padding:4px 10px; border-radius:6px; font-size:11px; cursor:pointer;">Kapat</button>`;
@@ -2215,7 +2185,7 @@ function computeSqueezeMomentum(klines, bbLength = 20, bbMult = 2.0, kcLength = 
 // Trend takip eden veya patlayan coinlerin TAM TERSI bir profil ariyoruz burada.
 
 const RANGE_INTERVALS = ["15m", "30m", "1h", "4h", "1d"];
-const RANGE_UNIVERSE_SIZE = 60;
+const RANGE_UNIVERSE_SIZE = 100; // "daha genis" istegi - daha fazla coin taransin (60'tan 100'e cikarildi)
 const RANGE_ZONE_PCT = 0.15;      // ust/alt %15'lik bolgeye deginme "bant testi" sayilir
 const RANGE_MAX_WIDTH_PCT = 40;   // aralik (yuksek-dusuk)/dusuk yuzdesi bunun altinda olmali (cok genisse "bant" degil trend'dir)
 const RANGE_MIN_TOUCHES = 3;      // en az kac kere gidip gelmis olmali
@@ -2306,35 +2276,8 @@ async function checkBandBreakoutRisk(symbol) {
     return { oiChangePct, fundingRate, highRisk, reasons };
 }
 
-function closeRangeBandPage() { document.getElementById("rangeband-overlay").classList.remove("open"); }
-
-function openRangeBandInNewTab() {
-    const url = window.location.origin + window.location.pathname + "#rangeband";
-    window.open(url, "_blank");
-}
-
-function openRangeBandPage() {
-    const overlay = document.getElementById("rangeband-overlay");
-    overlay.classList.add("open");
-    document.getElementById("rangeband-content").innerHTML = `
-        <div class="modal-title">📊 Bant İçi (Range) Coinler</div>
-        <div class="modal-subtitle">
-            Fiyatı sabit bir aralıkta (destek-direnç bandında) <strong>tekrar tekrar</strong> gidip
-            gelen coinleri bulur — bunlar range/kanal trade'i (bandın altından al, üstünden sat,
-            tekrarla) için uygun adaylardır. Trend yapan ya da patlayan coinlerin tam tersi bir
-            profil aranır. 5 farklı zaman diliminde (15dk/30dk/1s/4s/günlük) ayrı ayrı kontrol edilir.
-        </div>
-        <button id="run-rangeband-btn" onclick="runRangeBandScan()" style="width:100%; padding:14px; background:var(--amber); color:#000; border:none; border-radius:10px; font-weight:800; cursor:pointer; margin-bottom:10px;">▶ Şimdi Tara (~2-3 dakika sürer)</button>
-        <button id="run-rangeband-backtest-btn" onclick="runRangeBandBacktest()" style="width:100%; padding:12px; background:var(--bg-elev); color:var(--text); border:2px solid var(--border); border-radius:10px; font-weight:700; cursor:pointer; margin-bottom:16px;">🔬 Geçmişe Dönük Test (bu strateji gerçekten kâr getirir mi?)</button>
-        <div id="rangeband-backtest-results"></div>
-        <div id="rangeband-results"></div>
-        <div class="modal-disclaimer" style="margin-top:16px;">
-            Bu bir yatırım tavsiyesi değildir. Geçmişte bant içinde kalmış olmak, gelecekte de öyle
-            kalacağı anlamına gelmez — bir haber/olay bandı her an kırabilir. Kaldıraçlı (futures)
-            işlemlerde band kırılırsa hızlı zarar riski vardır, stop-loss kullanmayı ihmal etme.
-        </div>
-    `;
-}
+// (openRangeBandPage/closeRangeBandPage/openRangeBandInNewTab kaldirildi - Bant Ici artik
+// ana sayfada dogrudan gosteriliyor, ayri bir modal/sekme acmaya gerek yok.)
 
 async function runRangeBandScan() {
     const btn = document.getElementById("run-rangeband-btn");
@@ -2370,7 +2313,7 @@ async function runRangeBandScan() {
                 await sleep(50);
             }
 
-            if (anyBand) rows.push({ symbol: t.symbol, byInterval, totalTouches });
+            if (anyBand) rows.push({ symbol: t.symbol, byInterval, totalTouches, price: t.price, dailyChangePercent: t.changePercent });
         }
 
         // KIRILMA RISKI: sadece bant BULUNAN coinler icin kontrol et (60 coinin hepsi icin degil - verimlilik icin)
@@ -2449,6 +2392,273 @@ async function backtestRangeBandForSymbols(symbols, onProgress) {
         }
     }
     return allTrades;
+}
+
+// ================= GELISMIS BANT ANALIZI (POC, CVD, Sikisma Suresi, RSI Uyumsuzlugu, Emir Defteri) =================
+// ONEMLI: Bu bolum, eski "Bant Ici Coinler" sayfasindaki detectRangeBand() fonksiyonuna HIC
+// DOKUNMAZ - onu oldugu gibi cagirip kullanir. Buradaki her sey YENI, ayri fonksiyonlardir.
+// Kapsam bilinçli olarak sinirlandirildi: 5 agir metrigi 5 zaman diliminde 100 coin'e uygulamak
+// pratik olmayacak kadar yavas olurdu - bu yuzden TEK zaman dilimi (1 saatlik) ve 50 coin ile
+// calisir.
+
+const ADV_RANGE_UNIVERSE_SIZE = 50;
+const ADV_RANGE_INTERVAL = "1h";
+const ADV_RANGE_HISTORY_LIMIT = 300; // sikisma suresi gibi metrikler icin bant penceresinden (80) daha fazla gecmis gerekiyor
+
+/** fetchScalpKlines'a dokunmadan, AYRICA taker-buy-hacmi de iceren yeni bir veri cekme fonksiyonu. */
+async function fetchKlinesWithTakerVolume(symbol, interval, limit) {
+    const url = `${API_BASE}/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`${symbol} verisi alınamadı`);
+    const arr = await res.json();
+    return arr.map(k => ({
+        openTime: k[0], open: parseFloat(k[1]), high: parseFloat(k[2]),
+        low: parseFloat(k[3]), close: parseFloat(k[4]), volume: parseFloat(k[5]),
+        takerBuyVolume: parseFloat(k[9])
+    }));
+}
+
+/** 1) HACIM PROFILI / POC: bandi N dilime bolup, hangi fiyat seviyesinin en cok hacim topladigini bulur. */
+function computePOC(klines, rangeLow, rangeHigh, numBins = 20) {
+    const binSize = (rangeHigh - rangeLow) / numBins;
+    if (binSize <= 0) return null;
+    const bins = new Array(numBins).fill(0);
+    for (const k of klines) {
+        const lo = Math.max(k.low, rangeLow), hi = Math.min(k.high, rangeHigh);
+        if (hi <= lo) continue;
+        const totalRange = hi - lo;
+        const startBin = Math.max(0, Math.floor((lo - rangeLow) / binSize));
+        const endBin = Math.min(numBins - 1, Math.floor((hi - rangeLow) / binSize));
+        for (let b = startBin; b <= endBin; b++) {
+            const binLow = rangeLow + b * binSize, binHigh = binLow + binSize;
+            const overlap = Math.min(hi, binHigh) - Math.max(lo, binLow);
+            if (overlap > 0) bins[b] += k.volume * (overlap / totalRange);
+        }
+    }
+    let maxBin = 0;
+    for (let b = 1; b < numBins; b++) if (bins[b] > bins[maxBin]) maxBin = b;
+    return { pocPrice: rangeLow + (maxBin + 0.5) * binSize };
+}
+
+/** 2) CVD (Kumulatif Hacim Deltasi): agresif alicilar mi satiicilar mi baskin, kline'daki taker-buy alanindan. */
+function computeCVD(klines) {
+    let cumulative = 0;
+    for (const k of klines) {
+        const takerSell = k.volume - k.takerBuyVolume;
+        cumulative += (k.takerBuyVolume - takerSell);
+    }
+    // Egilimi anlamak icin ilk yariyla ikinci yariyi karsilastir
+    const mid = Math.floor(klines.length / 2);
+    let firstHalf = 0, secondHalf = 0;
+    for (let i = 0; i < mid; i++) firstHalf += (klines[i].takerBuyVolume - (klines[i].volume - klines[i].takerBuyVolume));
+    for (let i = mid; i < klines.length; i++) secondHalf += (klines[i].takerBuyVolume - (klines[i].volume - klines[i].takerBuyVolume));
+    return { totalDelta: cumulative, trend: secondHalf - firstHalf };
+}
+
+/** 3) SIKISMA SURESI: fiyat, bu bandin (kucuk toleransla) icinde GERCEKTEN kac mumdur kaliyor. */
+function computeRangeDuration(fullKlines, rangeLow, rangeHigh, toleranceMult = 1.02) {
+    let count = 0;
+    for (let i = fullKlines.length - 1; i >= 0; i--) {
+        const k = fullKlines[i];
+        if (k.high <= rangeHigh * toleranceMult && k.low >= rangeLow / toleranceMult) count++;
+        else break;
+    }
+    return count; // mum sayisi - saatlik veri oldugu icin dogrudan saat sayisina esittir
+}
+
+/** 4) RSI UYUMSUZLUGU: bandin ayni kenarina (TOP ya da BOTTOM) yapilan ardisik dokunuslarda RSI ters mi hareket ediyor. */
+function detectRangeDivergence(klines, rangeLow, rangeHigh, zonePct = 0.15) {
+    const closes = klines.map(k => k.close);
+    const topThreshold = rangeLow + (1 - zonePct) * (rangeHigh - rangeLow);
+    const bottomThreshold = rangeLow + zonePct * (rangeHigh - rangeLow);
+
+    let state = null;
+    const touches = [];
+    for (let i = 0; i < closes.length; i++) {
+        const c = closes[i];
+        if (c >= topThreshold) {
+            if (state !== "TOP") { touches.push({ index: i, type: "TOP", price: c }); state = "TOP"; }
+        } else if (c <= bottomThreshold) {
+            if (state !== "BOTTOM") { touches.push({ index: i, type: "BOTTOM", price: c }); state = "BOTTOM"; }
+        }
+    }
+
+    function rsiAt(idx) {
+        if (idx < 15) return null;
+        return computeRSI(closes.slice(0, idx + 1), 14);
+    }
+
+    const bottomTouches = touches.filter(t => t.type === "BOTTOM");
+    const topTouches = touches.filter(t => t.type === "TOP");
+
+    let bullishDivergence = false, bearishDivergence = false;
+    if (bottomTouches.length >= 2) {
+        const last = bottomTouches[bottomTouches.length - 1], prev = bottomTouches[bottomTouches.length - 2];
+        const rsiLast = rsiAt(last.index), rsiPrev = rsiAt(prev.index);
+        if (rsiLast != null && rsiPrev != null && last.price <= prev.price && rsiLast > rsiPrev) bullishDivergence = true;
+    }
+    if (topTouches.length >= 2) {
+        const last = topTouches[topTouches.length - 1], prev = topTouches[topTouches.length - 2];
+        const rsiLast = rsiAt(last.index), rsiPrev = rsiAt(prev.index);
+        if (rsiLast != null && rsiPrev != null && last.price >= prev.price && rsiLast < rsiPrev) bearishDivergence = true;
+    }
+
+    return { bullishDivergence, bearishDivergence };
+}
+
+/** 5) EMIR DEFTERI DUVARLARI: bandin hemen ustunde/altinda GERCEK, CANLI buyuk emirler var mi (Binance depth verisi). */
+async function checkOrderBookWalls(symbol, rangeLow, rangeHigh) {
+    const data = await safeFetchJson(`${API_BASE}/fapi/v1/depth?symbol=${symbol}&limit=100`);
+    if (!data) return { available: false };
+
+    const resistanceZoneTop = rangeHigh * 1.01;
+    const supportZoneBottom = rangeLow * 0.99;
+
+    let askWallNotional = 0;
+    for (const [priceStr, qtyStr] of data.asks) {
+        const price = parseFloat(priceStr), qty = parseFloat(qtyStr);
+        if (price >= rangeHigh && price <= resistanceZoneTop) askWallNotional += price * qty;
+    }
+    let bidWallNotional = 0;
+    for (const [priceStr, qtyStr] of data.bids) {
+        const price = parseFloat(priceStr), qty = parseFloat(qtyStr);
+        if (price <= rangeLow && price >= supportZoneBottom) bidWallNotional += price * qty;
+    }
+
+    return { available: true, askWallNotional, bidWallNotional };
+}
+
+function closeAdvRangePage() { document.getElementById("advrange-overlay").classList.remove("open"); }
+
+function openAdvRangeInNewTab() {
+    const url = window.location.origin + window.location.pathname + "#advrange";
+    window.open(url, "_blank");
+}
+
+function openAdvRangePage() {
+    const overlay = document.getElementById("advrange-overlay");
+    overlay.classList.add("open");
+    document.getElementById("advrange-content").innerHTML = `
+        <div class="modal-title">🔬 Gelişmiş Bant Analizi</div>
+        <div class="modal-subtitle">
+            Standart Bant İçi taramasının üzerine 5 ek katman ekler: <strong>Hacim Profili (POC)</strong>,
+            <strong>CVD (gizli alım/satım baskısı)</strong>, <strong>Sıkışma Süresi</strong>,
+            <strong>RSI Uyumsuzluğu</strong> ve <strong>canlı emir defteri duvarları</strong>.
+            Kapsam: en likit ${ADV_RANGE_UNIVERSE_SIZE} coin, sadece ${ADV_RANGE_INTERVAL} zaman diliminde
+            (5 ağır metriği 5 zaman diliminde çalıştırmak pratik olmayacak kadar yavaş olurdu).
+            Eski "Bant İçi Coinler" sayfasındaki bant tespit mantığına dokunulmadı, aynen kullanılıyor.
+        </div>
+        <button id="run-advrange-btn" onclick="runAdvRangeScan()" style="width:100%; padding:14px; background:var(--amber); color:#000; border:none; border-radius:10px; font-weight:800; cursor:pointer; margin-bottom:16px;">▶ Şimdi Tara (~2-3 dakika sürer)</button>
+        <div id="advrange-results"></div>
+        <div class="modal-disclaimer" style="margin-top:16px;">
+            Bu bir yatırım tavsiyesi değildir. Emir defteri duvarları SADECE o anki (saniyeler içinde
+            değişebilen) canlı görünümü yansıtır, kalıcı bir garanti değildir. CVD ve POC, kline
+            verisinden hesaplanan yaklaşık (approximate) metriklerdir, tam doğru tick-verisi değildir.
+        </div>
+    `;
+}
+
+async function runAdvRangeScan() {
+    const btn = document.getElementById("run-advrange-btn");
+    const el = document.getElementById("advrange-results");
+    btn.disabled = true;
+    btn.textContent = "⏳ Taranıyor...";
+    el.innerHTML = '<div class="modal-loading">⏳ En likit coinler belirleniyor...</div>';
+
+    try {
+        const tickers = await fetch24hrTickers();
+        const universe = tickers.filter(t => isCryptoSymbol(t.symbol))
+            .sort((a, b) => b.volume - a.volume).slice(0, ADV_RANGE_UNIVERSE_SIZE);
+
+        const rows = [];
+        let done = 0;
+        for (const t of universe) {
+            done++;
+            el.innerHTML = `<div class="modal-loading">⏳ Taranıyor... (${done}/${universe.length}) — ${t.symbol}</div>`;
+            try {
+                const klines = await fetchKlinesWithTakerVolume(t.symbol, ADV_RANGE_INTERVAL, ADV_RANGE_HISTORY_LIMIT);
+                const bandWindow = klines.slice(-80);
+                const band = detectRangeBand(bandWindow); // ESKI fonksiyon, degistirilmedi
+
+                if (band) {
+                    const poc = computePOC(bandWindow, band.rangeLow, band.rangeHigh);
+                    const cvd = computeCVD(bandWindow);
+                    const durationHours = computeRangeDuration(klines, band.rangeLow, band.rangeHigh);
+                    const divergence = detectRangeDivergence(bandWindow, band.rangeLow, band.rangeHigh);
+                    const walls = await checkOrderBookWalls(t.symbol, band.rangeLow, band.rangeHigh);
+
+                    rows.push({ symbol: t.symbol, band, poc, cvd, durationHours, divergence, walls });
+                }
+            } catch (e) { console.warn(t.symbol, "gelismis analiz hatasi:", e.message); }
+            await sleep(80);
+        }
+
+        rows.sort((a, b) => b.durationHours - a.durationHours);
+        renderAdvRangeResults(rows);
+    } catch (e) {
+        console.error(e);
+        el.innerHTML = `<div class="verdict-box verdict-bearish">Hata: ${e.message}</div>`;
+    } finally {
+        btn.disabled = false;
+        btn.textContent = "▶ Şimdi Tara (~2-3 dakika sürer)";
+    }
+}
+
+function renderAdvRangeResults(rows) {
+    const el = document.getElementById("advrange-results");
+    const now = new Date().toLocaleTimeString('tr-TR');
+
+    if (!rows.length) {
+        el.innerHTML = `<div class="empty-state" style="padding:30px 0;"><span class="big-emoji">◎</span>Şu an (${now}) 1 saatlik grafikte bant içinde gidip gelen coin bulunamadı.</div>`;
+        return;
+    }
+
+    function fmtUsd(n) {
+        if (n >= 1e6) return "$" + (n / 1e6).toFixed(1) + "M";
+        if (n >= 1e3) return "$" + (n / 1e3).toFixed(0) + "K";
+        return "$" + n.toFixed(0);
+    }
+
+    el.innerHTML = `
+        <div class="section-desc" style="margin-bottom:10px;">Tarama saati: ${now} — satırlar sıkışma süresine göre sıralı (en uzun süredir sıkışan en üstte).</div>
+        <div class="card">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Coin</th><th>Bant</th><th>POC (Yoğunlaşma)</th><th>CVD Eğilimi</th>
+                        <th>Sıkışma Süresi</th><th>RSI Uyumsuzluğu</th><th>Emir Duvarları</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${rows.map(r => {
+                        const cvdLabel = r.cvd.trend > 0
+                            ? `<span class="pos">📈 Alım artıyor</span>`
+                            : r.cvd.trend < 0
+                                ? `<span class="neg">📉 Satım artıyor</span>`
+                                : `<span class="num" style="color:var(--muted-dim);">Nötr</span>`;
+                        const divLabel = r.divergence.bullishDivergence
+                            ? `<span class="pos">🟢 Boğa uyumsuzluğu</span>`
+                            : r.divergence.bearishDivergence
+                                ? `<span class="neg">🔴 Ayı uyumsuzluğu</span>`
+                                : `<span class="num" style="color:var(--muted-dim);">Yok</span>`;
+                        const wallsLabel = r.walls.available
+                            ? `<div class="sub-cell">Direnç üstü: ${fmtUsd(r.walls.askWallNotional)}</div><div class="sub-cell">Destek altı: ${fmtUsd(r.walls.bidWallNotional)}</div>`
+                            : '<span class="num" style="color:var(--muted-dim);">—</span>';
+                        return `
+                        <tr onclick="openCoinAnalysis('${r.symbol}')">
+                            <td data-label="Coin"><div class="sym">${r.symbol}</div></td>
+                            <td class="num" data-label="Bant">$${r.band.rangeLow.toPrecision(4)}–$${r.band.rangeHigh.toPrecision(4)}</td>
+                            <td class="num" data-label="POC">${r.poc ? '$' + r.poc.pocPrice.toPrecision(4) : '—'}</td>
+                            <td data-label="CVD Eğilimi">${cvdLabel}</td>
+                            <td class="num" data-label="Sıkışma Süresi">${r.durationHours} saat</td>
+                            <td data-label="RSI Uyumsuzluğu">${divLabel}</td>
+                            <td data-label="Emir Duvarları">${wallsLabel}</td>
+                        </tr>
+                    `;}).join('')}
+                </tbody>
+            </table>
+        </div>
+    `;
 }
 
 function closeCoinBacktestModal() { document.getElementById("coin-backtest-overlay").classList.remove("open"); }
@@ -2588,6 +2798,8 @@ function renderRangeBandResults(rows) {
                 bulunamadı (${now}). Piyasa geneli trend yapıyor olabilir.
             </div>
         `;
+        const countChip = document.getElementById("rangeband-count-chip");
+        if (countChip) countChip.textContent = "0 aday";
         return;
     }
 
@@ -2636,11 +2848,13 @@ function renderRangeBandResults(rows) {
         </div>
         <div class="card">
             <table>
-                <thead><tr><th>Coin</th><th></th><th>Kırılma Riski</th><th>15dk</th><th>30dk</th><th>1 Saat</th><th>4 Saat</th><th>Günlük</th></tr></thead>
+                <thead><tr><th>Coin</th><th>Güncel Fiyat</th><th>24s Değişim</th><th></th><th>Kırılma Riski</th><th>15dk</th><th>30dk</th><th>1 Saat</th><th>4 Saat</th><th>Günlük</th></tr></thead>
                 <tbody>
                     ${rows.map(r => `
                         <tr onclick="openCoinAnalysis('${r.symbol}')">
                             <td data-label="Coin"><div class="sym">${r.symbol}</div></td>
+                            <td class="num" data-label="Güncel Fiyat">$${r.price}</td>
+                            <td class="${r.dailyChangePercent>=0?'pos':'neg'}" data-label="24s Değişim">${r.dailyChangePercent>=0?'+':''}${r.dailyChangePercent.toFixed(1)}%</td>
                             <td data-label=""><button onclick="event.stopPropagation(); runSingleCoinBacktest('${r.symbol}')" style="background:var(--bg-elev); border:1px solid var(--border); color:var(--text); padding:6px 10px; border-radius:8px; font-size:11px; font-weight:700; cursor:pointer; white-space:nowrap;">🔬 Test Et</button></td>
                             <td data-label="Kırılma Riski">${riskHtml(r.risk)}</td>
                             <td data-label="15dk">${cellHtml(r.byInterval["15m"])}</td>
@@ -2654,6 +2868,8 @@ function renderRangeBandResults(rows) {
             </table>
         </div>
     `;
+    const countChip = document.getElementById("rangeband-count-chip");
+    if (countChip) countChip.textContent = rows.length + " aday bulundu";
 }
 
 
@@ -3618,7 +3834,6 @@ async function renderCoinDetail(symbol) {
 
 renderTop30();
 renderSignals();
-updateDipBadge();
 
 // URL'de #followline varsa (yeni sekmede acildiysa), bu sayfayi otomatik ac ve taramayi baslat
 if (window.location.hash === "#followline") {
@@ -3628,11 +3843,11 @@ if (window.location.hash === "#followline") {
     }, 300);
 }
 
-// URL'de #rangeband varsa, bant ici coin sayfasini otomatik ac ve taramayi baslat
-if (window.location.hash === "#rangeband") {
+// URL'de #advrange varsa, Gelismis Bant Analizi sayfasini otomatik ac ve taramayi baslat
+if (window.location.hash === "#advrange") {
     setTimeout(() => {
-        openRangeBandPage();
-        setTimeout(() => runRangeBandScan(), 200);
+        openAdvRangePage();
+        setTimeout(() => runAdvRangeScan(), 200);
     }, 300);
 }
 
