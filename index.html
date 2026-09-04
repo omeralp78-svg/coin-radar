@@ -358,6 +358,7 @@
                 </div>
             </div>
             <div class="icon-actions">
+                <button class="icon-btn" onclick="openLiveMonitorPage()">⚡ Canlı İzleme</button>
                 <button class="icon-btn" onclick="openAdvRangeInNewTab()">🔬 Gelişmiş Bant Analizi ↗</button>
                 <button class="icon-btn" onclick="openFollowLineInNewTab()">📈 Follow Line Sinyalleri ↗</button>
                 <button class="icon-btn" onclick="exportAllData(this)">⬇ Dışa Aktar</button>
@@ -517,6 +518,14 @@
     <div class="modal-box" style="max-width: 900px; width: 95vw;">
         <button class="modal-close" onclick="closeCoinBacktestModal()">×</button>
         <div id="coin-backtest-content"></div>
+    </div>
+</div>
+
+<!-- Canli Izleme - emir defteri dengesizligi + canli mum takibi ile erken uyari -->
+<div class="modal-overlay" id="livemonitor-overlay" onclick="if(event.target===this) closeLiveMonitorPage()">
+    <div class="modal-box" style="max-width: 1200px; width: 96vw;">
+        <button class="modal-close" onclick="closeLiveMonitorPage()">×</button>
+        <div id="livemonitor-content"></div>
     </div>
 </div>
 
@@ -2392,6 +2401,185 @@ async function backtestRangeBandForSymbols(symbols, onProgress) {
         }
     }
     return allTrades;
+}
+
+// ================= CANLI IZLEME (emir defteri dengesizligi + canli mum takibi) =================
+// Kesin bir "birazdan patlayacak" tahmini YAPILAMAZ - kimse bunu garanti edemez. Burada yapilan,
+// olasiligi artiran iki ERKEN gostergeye bakmak: (1) emir defterinde alis/satis dengesizligi,
+// (2) su an OLUSMAKTA olan (henuz kapanmamis) 1 dakikalik mumun hacim hizlanmasi. Surekli acik
+// kalan bir ekran gerektirir - bu yuzden diger "tara ve birak" araclarindan farkli calisir.
+
+let liveMonitorTimer = null;
+let liveMonitorData = {};
+const LIVE_MONITOR_INTERVAL_MS = 8000; // her 8 saniyede bir kontrol - hiz limitlerine takilmadan yeterince sik
+
+async function fetchOrderBookImbalance(symbol) {
+    const data = await safeFetchJson(`${API_BASE}/fapi/v1/depth?symbol=${symbol}&limit=20`);
+    if (!data) return null;
+    const bidVolume = data.bids.reduce((s, [p, q]) => s + parseFloat(q), 0);
+    const askVolume = data.asks.reduce((s, [p, q]) => s + parseFloat(q), 0);
+    if (askVolume === 0) return null;
+    return bidVolume / askVolume; // >1 alis agir basiyor, <1 satis agir basiyor
+}
+
+/** Su an olusmakta olan (henuz kapanmamis) 1 dakikalik mumun hacim hizlanmasini olcer. */
+async function fetchLiveCandleAcceleration(symbol) {
+    const klines = await safeFetchJson(`${API_BASE}/fapi/v1/klines?symbol=${symbol}&interval=1m&limit=11`);
+    if (!klines || klines.length < 11) return null;
+
+    const completed = klines.slice(0, 10); // son 10 TAMAMLANMIS mum - ortalama hacim icin
+    const current = klines[10]; // su an olusmakta olan (henuz kapanmamis) mum
+
+    const avgVolume = completed.reduce((s, k) => s + parseFloat(k[5]), 0) / completed.length;
+    if (avgVolume === 0) return null;
+
+    const currentVolume = parseFloat(current[5]);
+    const openTime = current[0];
+    const secondsElapsed = Math.max(1, (Date.now() - openTime) / 1000);
+    const expectedVolumeAtThisPoint = avgVolume * Math.min(1, secondsElapsed / 60);
+    if (expectedVolumeAtThisPoint === 0) return null;
+
+    return {
+        accelerationRatio: currentVolume / expectedVolumeAtThisPoint,
+        currentPrice: parseFloat(current[4]),
+        secondsElapsed: Math.round(secondsElapsed)
+    };
+}
+
+async function runLiveMonitorCycle(symbols) {
+    for (const symbol of symbols) {
+        try {
+            const [imbalance, candleInfo] = await Promise.all([
+                fetchOrderBookImbalance(symbol),
+                fetchLiveCandleAcceleration(symbol)
+            ]);
+
+            let level = "normal", reasons = [];
+            const strongImbalance = imbalance != null && (imbalance >= 1.8 || imbalance <= 0.55);
+            const strongAcceleration = candleInfo != null && candleInfo.accelerationRatio >= 2.5;
+
+            if (strongImbalance) reasons.push(imbalance >= 1.8 ? "Alış baskın (emir defteri)" : "Satış baskın (emir defteri)");
+            if (strongAcceleration) reasons.push("Hacim anormal hızlanıyor");
+
+            if (strongImbalance && strongAcceleration) level = "strong";
+            else if (strongImbalance || strongAcceleration) level = "watch";
+
+            liveMonitorData[symbol] = { imbalance, candleInfo, level, reasons, updatedAt: Date.now() };
+        } catch (e) {
+            liveMonitorData[symbol] = { error: e.message, updatedAt: Date.now() };
+        }
+    }
+    renderLiveMonitorTable(symbols);
+}
+
+function closeLiveMonitorPage() {
+    document.getElementById("livemonitor-overlay").classList.remove("open");
+    stopLiveMonitor(); // sekme kapaninca gereksiz yere arka planda API tuketmesin
+}
+
+function openLiveMonitorPage() {
+    const overlay = document.getElementById("livemonitor-overlay");
+    overlay.classList.add("open");
+    document.getElementById("livemonitor-content").innerHTML = `
+        <div class="modal-title">⚡ Canlı İzleme</div>
+        <div class="modal-subtitle">
+            Kesin bir "birazdan patlayacak" tahmini yapılamaz — bunu iddia eden hiçbir araç güvenilir
+            değildir. Burada iki ERKEN gösterge izlenir: <strong>emir defteri dengesizliği</strong>
+            (alış/satış baskısı, fiyat hareket etmeden önce görülebilir) ve <strong>şu an oluşmakta
+            olan mumun hacim hızlanması</strong> (mum kapanmadan önce yakalar). İkisi birden aynı anda
+            görülürse "Güçlü" olarak işaretlenir. En fazla ~15-20 coin izlemen önerilir (daha fazlası
+            hız sınırlarına takılabilir).
+        </div>
+        <div style="display:flex; gap:10px; margin-bottom:16px; flex-wrap:wrap;">
+            <input id="livemonitor-symbols" type="text" placeholder="BTCUSDT,ETHUSDT,SOLUSDT gibi virgülle ayırarak yaz"
+                style="flex:1; min-width:250px; padding:10px 12px; background:var(--bg-elev); border:2px solid var(--border); color:var(--text); border-radius:10px; font-family:'IBM Plex Mono',monospace; font-size:13px;">
+            <button id="livemonitor-start-btn" onclick="startLiveMonitor()" style="padding:10px 20px; background:var(--amber); color:#000; border:none; border-radius:10px; font-weight:800; cursor:pointer;">▶ Başlat</button>
+            <button id="livemonitor-stop-btn" onclick="stopLiveMonitor()" style="padding:10px 20px; background:var(--bg-elev); color:var(--text); border:2px solid var(--border); border-radius:10px; font-weight:700; cursor:pointer; display:none;">⏹ Durdur</button>
+        </div>
+        <div id="livemonitor-status" style="font-size:12.5px; color:var(--muted); margin-bottom:10px;"></div>
+        <div id="livemonitor-results">
+            <div class="empty-state"><span class="big-emoji">◎</span>Coin sembollerini yaz ve "Başlat"a bas.</div>
+        </div>
+        <div class="modal-disclaimer" style="margin-top:16px;">
+            Bu bir yatırım tavsiyesi değildir. Emir defteri ve hacim hızlanması, olasılığı artıran
+            göstergelerdir — kesinlik taşımaz, yanlış alarm verebilir (özellikle düşük hacimli
+            coinlerde emir defteri kolayca manipüle edilebilir). Sekmeyi/pencereyi kapatırsan izleme
+            otomatik durur.
+        </div>
+    `;
+}
+
+function startLiveMonitor() {
+    const input = document.getElementById("livemonitor-symbols");
+    const symbols = input.value.toUpperCase().split(",").map(s => s.trim()).filter(Boolean);
+    if (!symbols.length) { alert("En az bir coin sembolü yaz (örn. BTCUSDT)"); return; }
+    if (symbols.length > 25) { alert("En fazla 25 coin izleyebilirsin (hız sınırları için)."); return; }
+
+    stopLiveMonitor();
+    liveMonitorData = {};
+    document.getElementById("livemonitor-start-btn").style.display = "none";
+    document.getElementById("livemonitor-stop-btn").style.display = "inline-block";
+    document.getElementById("livemonitor-status").textContent = `🟢 İzleniyor: ${symbols.join(", ")}`;
+
+    runLiveMonitorCycle(symbols);
+    liveMonitorTimer = setInterval(() => runLiveMonitorCycle(symbols), LIVE_MONITOR_INTERVAL_MS);
+}
+
+function stopLiveMonitor() {
+    if (liveMonitorTimer) { clearInterval(liveMonitorTimer); liveMonitorTimer = null; }
+    const startBtn = document.getElementById("livemonitor-start-btn");
+    const stopBtn = document.getElementById("livemonitor-stop-btn");
+    const statusEl = document.getElementById("livemonitor-status");
+    if (startBtn) startBtn.style.display = "inline-block";
+    if (stopBtn) stopBtn.style.display = "none";
+    if (statusEl) statusEl.textContent = "⚪ Durduruldu.";
+}
+
+function renderLiveMonitorTable(symbols) {
+    const el = document.getElementById("livemonitor-results");
+    if (!el) return;
+
+    const rows = symbols.map(symbol => {
+        const d = liveMonitorData[symbol];
+        if (!d) return { symbol, level: "loading" };
+        return { symbol, ...d };
+    });
+
+    el.innerHTML = `
+        <div class="card">
+            <table>
+                <thead><tr><th>Coin</th><th>Fiyat</th><th>Emir Defteri Dengesi</th><th>Canlı Mum Hacmi</th><th>Durum</th></tr></thead>
+                <tbody>
+                    ${rows.map(r => {
+                        if (r.error) return `<tr><td data-label="Coin"><div class="sym">${r.symbol}</div></td><td colspan="4" class="num" style="color:var(--muted-dim);">Veri alınamadı</td></tr>`;
+                        if (r.level === "loading") return `<tr><td data-label="Coin"><div class="sym">${r.symbol}</div></td><td colspan="4" class="num" style="color:var(--muted-dim);">⏳</td></tr>`;
+
+                        const imb = r.imbalance;
+                        const imbLabel = imb == null ? '—' : imb >= 1.8 ? `<span class="pos">Alış ${imb.toFixed(2)}x</span>` : imb <= 0.55 ? `<span class="neg">Satış ${(1/imb).toFixed(2)}x</span>` : `${imb.toFixed(2)}`;
+
+                        const acc = r.candleInfo;
+                        const accLabel = acc == null ? '—' : `${acc.accelerationRatio.toFixed(1)}x <div class="sub-cell">${acc.secondsElapsed}s içinde</div>`;
+
+                        const price = acc ? '$' + acc.currentPrice : '—';
+
+                        let statusChip;
+                        if (r.level === "strong") statusChip = `<span class="status-chip chip-hot"><span class="dot"></span>🔴 Güçlü</span>`;
+                        else if (r.level === "watch") statusChip = `<span class="status-chip chip-warm"><span class="dot"></span>🟡 Dikkat</span>`;
+                        else statusChip = `<span class="num" style="color:var(--muted-dim);">Normal</span>`;
+
+                        return `
+                        <tr onclick="openCoinAnalysis('${r.symbol}')">
+                            <td data-label="Coin"><div class="sym">${r.symbol}</div></td>
+                            <td class="num" data-label="Fiyat">${price}</td>
+                            <td data-label="Emir Defteri">${imbLabel}</td>
+                            <td data-label="Canlı Mum">${accLabel}</td>
+                            <td data-label="Durum">${statusChip}${r.reasons && r.reasons.length ? `<div class="sub-cell">${r.reasons.join(', ')}</div>` : ''}</td>
+                        </tr>
+                    `;}).join('')}
+                </tbody>
+            </table>
+        </div>
+    `;
 }
 
 // ================= GELISMIS BANT ANALIZI (POC, CVD, Sikisma Suresi, RSI Uyumsuzlugu, Emir Defteri) =================
