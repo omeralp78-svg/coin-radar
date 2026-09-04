@@ -358,6 +358,7 @@
                 </div>
             </div>
             <div class="icon-actions">
+                <button class="icon-btn" onclick="openMinuteSpikeInNewTab()">🔥 Son Dakika Spike Taraması ↗</button>
                 <button class="icon-btn" onclick="openLiveMonitorPage()">⚡ Canlı İzleme</button>
                 <button class="icon-btn" onclick="openAdvRangeInNewTab()">🔬 Gelişmiş Bant Analizi ↗</button>
                 <button class="icon-btn" onclick="openFollowLineInNewTab()">📈 Follow Line Sinyalleri ↗</button>
@@ -518,6 +519,14 @@
     <div class="modal-box" style="max-width: 900px; width: 95vw;">
         <button class="modal-close" onclick="closeCoinBacktestModal()">×</button>
         <div id="coin-backtest-content"></div>
+    </div>
+</div>
+
+<!-- Son Dakika Spike Taramasi - genis coin evreninde son kapanan 1dk mumda sert hareket olanlari bulur -->
+<div class="modal-overlay" id="minutespike-overlay" onclick="if(event.target===this) closeMinuteSpikePage()">
+    <div class="modal-box" style="max-width: 1100px; width: 95vw;">
+        <button class="modal-close" onclick="closeMinuteSpikePage()">×</button>
+        <div id="minutespike-content"></div>
     </div>
 </div>
 
@@ -2403,6 +2412,122 @@ async function backtestRangeBandForSymbols(symbols, onProgress) {
     return allTrades;
 }
 
+// ================= SON DAKIKA SPIKE TARAMASI (genis evrende, son kapanan 1dk mumda sert hareket) =================
+// Canli Izleme'den farkli: o SURDURULEBILIR (kucuk bir listeyi surekli izler), bu ise TEK SEFERLIK
+// ggeneris bir tarama (yuzlerce coine bakip "kim daha SIMDI, son 1 dakikada sert hareket etti" sorusuna cevap verir).
+
+const SPIKE_UNIVERSE_SIZE = 150;
+const SPIKE_THRESHOLD_PCT = 1.5; // son kapanan 1dk mumda bu yuzdeden fazla hareket varsa "spike" sayilir
+
+/** Bir coinin SON TAMAMLANMIS 1 dakikalik mumunda spike olup olmadigina bakar. */
+async function detectMinuteSpike(symbol) {
+    const klines = await fetchScalpKlines(symbol, "1m", 15);
+    if (!klines || klines.length < 15) return null;
+
+    // Binance'in dondugu en SON eleman zamanlamaya gore hala olusuyor olabilir - guvenli olsun
+    // diye SONDAN BIR ONCEKI mumu "kesin tamamlanmis son mum" olarak aliyoruz.
+    const lastCompleted = klines[klines.length - 2];
+    const baseline = klines.slice(0, klines.length - 2);
+
+    const changePct = lastCompleted.open === 0 ? 0 : ((lastCompleted.close - lastCompleted.open) / lastCompleted.open) * 100;
+    if (Math.abs(changePct) < SPIKE_THRESHOLD_PCT) return null;
+
+    const avgVolume = baseline.reduce((s, k) => s + k.volume, 0) / baseline.length;
+    const volRatio = avgVolume === 0 ? null : lastCompleted.volume / avgVolume;
+
+    return { changePct, volRatio, price: lastCompleted.close, time: lastCompleted.openTime };
+}
+
+function closeMinuteSpikePage() { document.getElementById("minutespike-overlay").classList.remove("open"); }
+
+function openMinuteSpikeInNewTab() {
+    const url = window.location.origin + window.location.pathname + "#minutespike";
+    window.open(url, "_blank");
+}
+
+function openMinuteSpikePage() {
+    const overlay = document.getElementById("minutespike-overlay");
+    overlay.classList.add("open");
+    document.getElementById("minutespike-content").innerHTML = `
+        <div class="modal-title">🔥 Son Dakika Spike Taraması</div>
+        <div class="modal-subtitle">
+            En likit ${SPIKE_UNIVERSE_SIZE} coini tek tek tarayıp, <strong>son kapanan 1 dakikalık
+            mumda</strong> ±%${SPIKE_THRESHOLD_PCT}'in üzerinde hareket edenleri bulur. "Canlı İzleme"den
+            farkı: bu sürekli açık kalmaz, tek seferlik "şu an kim hareket etti" taraması yapar.
+        </div>
+        <button id="run-minutespike-btn" onclick="runMinuteSpikeScan()" style="width:100%; padding:14px; background:var(--amber); color:#000; border:none; border-radius:10px; font-weight:800; cursor:pointer; margin-bottom:16px;">▶ Şimdi Tara (~1-2 dakika sürer)</button>
+        <div id="minutespike-results"></div>
+        <div class="modal-disclaimer" style="margin-top:16px;">
+            Bu bir yatırım tavsiyesi değildir. Tek dakikalık hareketler çoğu zaman gürültüdür ve
+            devam etmeyebilir — bir mumda spike olması, trendin süreceği anlamına gelmez.
+        </div>
+    `;
+}
+
+async function runMinuteSpikeScan() {
+    const btn = document.getElementById("run-minutespike-btn");
+    const el = document.getElementById("minutespike-results");
+    btn.disabled = true;
+    btn.textContent = "⏳ Taranıyor...";
+    el.innerHTML = '<div class="modal-loading">⏳ En likit coinler belirleniyor...</div>';
+
+    try {
+        const tickers = await fetch24hrTickers();
+        const universe = tickers.filter(t => isCryptoSymbol(t.symbol))
+            .sort((a, b) => b.volume - a.volume).slice(0, SPIKE_UNIVERSE_SIZE);
+
+        const spikes = [];
+        let done = 0;
+        for (const t of universe) {
+            done++;
+            el.innerHTML = `<div class="modal-loading">⏳ Taranıyor... (${done}/${universe.length}) — ${t.symbol}</div>`;
+            try {
+                const spike = await detectMinuteSpike(t.symbol);
+                if (spike) spikes.push({ symbol: t.symbol, ...spike });
+            } catch (e) { console.warn(t.symbol, "spike tarama hatasi:", e.message); }
+            await sleep(60);
+        }
+
+        spikes.sort((a, b) => Math.abs(b.changePct) - Math.abs(a.changePct));
+        renderMinuteSpikeResults(spikes);
+    } catch (e) {
+        console.error(e);
+        el.innerHTML = `<div class="verdict-box verdict-bearish">Hata: ${e.message}</div>`;
+    } finally {
+        btn.disabled = false;
+        btn.textContent = "▶ Şimdi Tara (~1-2 dakika sürer)";
+    }
+}
+
+function renderMinuteSpikeResults(spikes) {
+    const el = document.getElementById("minutespike-results");
+    const now = new Date().toLocaleTimeString('tr-TR');
+
+    if (!spikes.length) {
+        el.innerHTML = `<div class="empty-state" style="padding:30px 0;"><span class="big-emoji">◎</span>Şu an (${now}) son 1 dakikalık mumda ±%${SPIKE_THRESHOLD_PCT}'i aşan bir hareket bulunamadı. Piyasa sakin.</div>`;
+        return;
+    }
+
+    el.innerHTML = `
+        <div class="section-desc" style="margin-bottom:10px;">Tarama saati: ${now} — en sert hareket eden en üstte.</div>
+        <div class="card">
+            <table>
+                <thead><tr><th>Coin</th><th>Son 1dk Değişim</th><th>Fiyat</th><th>Hacim Oranı</th></tr></thead>
+                <tbody>
+                    ${spikes.map(s => `
+                        <tr onclick="openCoinAnalysis('${s.symbol}')">
+                            <td data-label="Coin"><div class="sym">${s.symbol}</div></td>
+                            <td class="${s.changePct >= 0 ? 'pos' : 'neg'}" data-label="Değişim">${s.changePct >= 0 ? '+' : ''}${s.changePct.toFixed(2)}%</td>
+                            <td class="num" data-label="Fiyat">$${s.price}</td>
+                            <td class="num" data-label="Hacim Oranı">${s.volRatio != null ? s.volRatio.toFixed(1) + 'x' : '—'}</td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        </div>
+    `;
+}
+
 // ================= CANLI IZLEME (emir defteri dengesizligi + canli mum takibi) =================
 // Kesin bir "birazdan patlayacak" tahmini YAPILAMAZ - kimse bunu garanti edemez. Burada yapilan,
 // olasiligi artiran iki ERKEN gostergeye bakmak: (1) emir defterinde alis/satis dengesizligi,
@@ -4036,6 +4161,14 @@ if (window.location.hash === "#advrange") {
     setTimeout(() => {
         openAdvRangePage();
         setTimeout(() => runAdvRangeScan(), 200);
+    }, 300);
+}
+
+// URL'de #minutespike varsa, Son Dakika Spike Taramasi sayfasini otomatik ac ve taramayi baslat
+if (window.location.hash === "#minutespike") {
+    setTimeout(() => {
+        openMinuteSpikePage();
+        setTimeout(() => runMinuteSpikeScan(), 200);
     }, 300);
 }
 
