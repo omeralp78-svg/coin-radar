@@ -2506,6 +2506,47 @@ async function runSupplyScreenScan() {
         }
 
         results.sort((a, b) => a.maxSupply - b.maxSupply);
+
+        // PATLAMAYA YAKINLIK ANALIZI: her aday icin ayni sistemin Klasik Squeeze kontrolunu
+        // (Bollinger+OI+funding) ve "gecmiste hic patlama oldu mu" kontrolunu calistir.
+        // Liste zaten sıkı iki sarttan gectigi icin (max arz + tam dolasim) genelde kucuk kalir,
+        // bu yuzden hepsi icin canli kontrol yapmak pratik kaliyor.
+        for (let i = 0; i < results.length; i++) {
+            const r = results[i];
+            el.innerHTML = `<div class="modal-loading">⏳ Patlama analizi yapılıyor... (${i + 1}/${results.length}) — ${r.symbol}</div>`;
+            try {
+                const [dailyKlines200, oiHist48, fundingHist] = await Promise.all([
+                    safeFetchJson(`${API_BASE}/fapi/v1/klines?symbol=${r.symbol}&interval=1d&limit=200`),
+                    safeFetchJson(`${API_BASE}/futures/data/openInterestHist?symbol=${r.symbol}&period=1h&limit=49`),
+                    safeFetchJson(`${API_BASE}/fapi/v1/fundingRate?symbol=${r.symbol}&limit=1`)
+                ]);
+
+                if (dailyKlines200 && dailyKlines200.length >= 35) {
+                    const fundingRate = fundingHist && fundingHist.length ? parseFloat(fundingHist[0].fundingRate) * 100 : null;
+                    r.squeeze = computeClassicSqueeze(dailyKlines200.slice(-35), oiHist48, fundingRate);
+
+                    // Gecmiste (elimizdeki ~200 gunluk pencerede) hic HICBIR gunde %40+ tek gunluk
+                    // patlama olmus mu diye bak - hicbiri esigi asmadiysa "hic patlamamis" isaretlenir.
+                    let everPumped = false;
+                    for (const k of dailyKlines200) {
+                        const open = parseFloat(k[1]), high = parseFloat(k[2]);
+                        const changePct = open === 0 ? 0 : ((high - open) / open) * 100;
+                        if (changePct >= 40) { everPumped = true; break; }
+                    }
+                    r.everPumped = everPumped;
+                    r.historyDays = dailyKlines200.length;
+                } else {
+                    r.squeeze = { available: false };
+                    r.everPumped = null;
+                }
+            } catch (e) {
+                console.warn(r.symbol, "patlama analizi hatasi:", e.message);
+                r.squeeze = { available: false };
+                r.everPumped = null;
+            }
+            await sleep(150);
+        }
+
         renderSupplyScreenResults(results, cgMap.size);
     } catch (e) {
         console.error(e);
@@ -2532,21 +2573,41 @@ function renderSupplyScreenResults(results, totalScanned) {
         return n.toFixed(0);
     }
 
+    function squeezeLabel(sq) {
+        if (!sq || !sq.available) return '<span class="num" style="color:var(--muted-dim);">—</span>';
+        if (sq.allPass) return '<span class="status-chip chip-hot"><span class="dot"></span>🎯 3/3</span>';
+        const passCount = [sq.bbSqueeze, (sq.oiRising && sq.priceFlat), sq.fundingNeg].filter(Boolean).length;
+        return `<span class="num" style="color:var(--muted-dim);">${passCount}/3</span>`;
+    }
+
+    function pumpHistoryLabel(everPumped, historyDays) {
+        if (everPumped == null) return '<span class="num" style="color:var(--muted-dim);">—</span>';
+        if (everPumped) return '<span class="pos">✅ Var</span>';
+        return `<span class="neg">⚠️ Hiç yok</span><div class="sub-cell">(son ${historyDays} gün)</div>`;
+    }
+
     el.innerHTML = `
-        <div class="section-desc" style="margin-bottom:10px;">Tarama saati: ${now} — ${totalScanned} CoinGecko coini tarandı, ${results.length} tanesi kriterlere uydu. En düşük maksimum arz en üstte.</div>
+        <div class="section-desc" style="margin-bottom:10px;">
+            Tarama saati: ${now} — ${totalScanned} CoinGecko coini tarandı, ${results.length} tanesi kriterlere uydu.
+            En düşük maksimum arz en üstte. <strong>Coin ismine tıklayınca TradingView'de açılır.</strong>
+            "Sıkışma" sütunu Klasik Squeeze şartlarını (Bollinger+OI+funding), "Geçmiş Patlama" sütunu
+            bu coinin daha önce hiç sert (%40+ tek günlük) bir hareket yapıp yapmadığını gösterir.
+        </div>
         <div class="card">
             <table>
-                <thead><tr><th>Coin</th><th>İsim</th><th>Fiyat</th><th>Max Arz</th><th>Toplam Arz</th><th>Dolaşım Oranı</th><th>Piyasa Değeri</th></tr></thead>
+                <thead><tr><th>Coin</th><th>İsim</th><th>Fiyat</th><th>Max Arz</th><th>Toplam Arz</th><th>Dolaşım Oranı</th><th>Piyasa Değeri</th><th>Sıkışma</th><th>Geçmiş Patlama</th></tr></thead>
                 <tbody>
                     ${results.map(r => `
-                        <tr onclick="openCoinAnalysis('${r.symbol}')">
-                            <td data-label="Coin"><div class="sym">${r.symbol}</div></td>
+                        <tr>
+                            <td data-label="Coin"><a href="https://www.tradingview.com/chart/?symbol=BINANCE%3A${r.symbol}.P" target="_blank" rel="noopener" onclick="event.stopPropagation();" class="sym" style="text-decoration:none; color:inherit; cursor:pointer;">${r.symbol} ↗</a></td>
                             <td data-label="İsim">${r.name}</td>
                             <td class="num" data-label="Fiyat">$${r.price}</td>
                             <td class="num" data-label="Max Arz">${fmtNum(r.maxSupply)}</td>
                             <td class="num" data-label="Toplam Arz">${fmtNum(r.totalSupply)}</td>
                             <td class="pos" data-label="Dolaşım Oranı">%${(r.circRatio * 100).toFixed(1)}</td>
                             <td class="num" data-label="Piyasa Değeri">$${fmtNum(r.marketCap)}</td>
+                            <td data-label="Sıkışma">${squeezeLabel(r.squeeze)}</td>
+                            <td data-label="Geçmiş Patlama">${pumpHistoryLabel(r.everPumped, r.historyDays)}</td>
                         </tr>
                     `).join('')}
                 </tbody>
