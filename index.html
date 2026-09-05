@@ -358,6 +358,7 @@
                 </div>
             </div>
             <div class="icon-actions">
+                <button class="icon-btn" onclick="openSupplyScreenInNewTab()">🪙 Düşük Arz Coinleri ↗</button>
                 <button class="icon-btn" onclick="openMinuteSpikeInNewTab()">🔥 Son Dakika Spike Taraması ↗</button>
                 <button class="icon-btn" onclick="openLiveMonitorPage()">⚡ Canlı İzleme</button>
                 <button class="icon-btn" onclick="openAdvRangeInNewTab()">🔬 Gelişmiş Bant Analizi ↗</button>
@@ -519,6 +520,14 @@
     <div class="modal-box" style="max-width: 900px; width: 95vw;">
         <button class="modal-close" onclick="closeCoinBacktestModal()">×</button>
         <div id="coin-backtest-content"></div>
+    </div>
+</div>
+
+<!-- Dusuk Arz Coinleri - CoinGecko supply verisi + Binance Futures kesisimi -->
+<div class="modal-overlay" id="supplyscreen-overlay" onclick="if(event.target===this) closeSupplyScreenPage()">
+    <div class="modal-box" style="max-width: 1200px; width: 95vw;">
+        <button class="modal-close" onclick="closeSupplyScreenPage()">×</button>
+        <div id="supplyscreen-content"></div>
     </div>
 </div>
 
@@ -2412,6 +2421,140 @@ async function backtestRangeBandForSymbols(symbols, onProgress) {
     return allTrades;
 }
 
+// ================= DUSUK ARZ COINLERI (CoinGecko supply verisi + Binance Futures kesisimi) =================
+// CoinGecko'nun /coins/markets uc noktasi circulating_supply/total_supply/max_supply alanlarini
+// DOGRUDAN veriyor - tahmin/turetme gerekmiyor. Tek seferde 250 coin cekilebildigi icin (DexScreener'daki
+// gibi coin basina ayri istek atmak yerine) sadece birkac cagriyla binlerce coin taranabiliyor.
+
+const COINGECKO_BASE = "https://api.coingecko.com/api/v3";
+const SUPPLY_MAX_LIMIT = 1_000_000_000;       // max supply bunun altinda/esit olmali
+const SUPPLY_FULL_CIRC_RATIO = 0.97;          // circulating/total orani bunun ustundeyse "tamamen piyasada" sayilir
+const SUPPLY_PAGES = 8;                        // 8 sayfa x 250 = 2000 coin taranir (CoinGecko piyasa degerine gore siralar)
+
+async function fetchCoinGeckoMarketsPage(page) {
+    const url = `${COINGECKO_BASE}/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=${page}&sparkline=false`;
+    return await safeFetchJson(url);
+}
+
+function closeSupplyScreenPage() { document.getElementById("supplyscreen-overlay").classList.remove("open"); }
+
+function openSupplyScreenInNewTab() {
+    const url = window.location.origin + window.location.pathname + "#supplyscreen";
+    window.open(url, "_blank");
+}
+
+function openSupplyScreenPage() {
+    const overlay = document.getElementById("supplyscreen-overlay");
+    overlay.classList.add("open");
+    document.getElementById("supplyscreen-content").innerHTML = `
+        <div class="modal-title">🪙 Düşük Arz Coinleri</div>
+        <div class="modal-subtitle">
+            CoinGecko'nun piyasa verisiyle Binance Futures listesini çaprazlar. İki şartı arar:
+            <strong>maksimum arz ${SUPPLY_MAX_LIMIT.toLocaleString('tr-TR')}'ın altında/eşit</strong>
+            VE <strong>toplam arzın en az %${(SUPPLY_FULL_CIRC_RATIO*100).toFixed(0)}'ı zaten dolaşımda</strong>
+            (yani kilitli/vesting'de büyük bir kısım kalmamış). Bu değerler CoinGecko'dan doğrudan alınır,
+            tahmin edilmez.
+        </div>
+        <button id="run-supplyscreen-btn" onclick="runSupplyScreenScan()" style="width:100%; padding:14px; background:var(--amber); color:#000; border:none; border-radius:10px; font-weight:800; cursor:pointer; margin-bottom:16px;">▶ Şimdi Tara (~30-60 saniye sürer)</button>
+        <div id="supplyscreen-results"></div>
+        <div class="modal-disclaimer" style="margin-top:16px;">
+            Bu bir yatırım tavsiyesi değildir. Sembol eşleştirmesi (Binance ticker ↔ CoinGecko coin)
+            nadiren yanlış coinle eşleşebilir (aynı kısaltmayı kullanan farklı projeler olabilir) -
+            şüpheli bir sonuç görürsen coin adını (name alanı) kontrol et. CoinGecko'nun ücretsiz
+            API'si dakikada sınırlı istek kabul eder, bu yüzden tarama biraz zaman alabilir.
+        </div>
+    `;
+}
+
+async function runSupplyScreenScan() {
+    const btn = document.getElementById("run-supplyscreen-btn");
+    const el = document.getElementById("supplyscreen-results");
+    btn.disabled = true;
+    btn.textContent = "⏳ Taranıyor...";
+    el.innerHTML = '<div class="modal-loading">⏳ Binance Futures listesi alınıyor...</div>';
+
+    try {
+        const tickers = await fetch24hrTickers();
+        const binanceSymbols = new Set(tickers.filter(t => isCryptoSymbol(t.symbol)).map(t => t.symbol.replace(/USDT$/, "")));
+
+        const cgMap = new Map();
+        for (let page = 1; page <= SUPPLY_PAGES; page++) {
+            el.innerHTML = `<div class="modal-loading">⏳ CoinGecko verisi çekiliyor... (sayfa ${page}/${SUPPLY_PAGES})</div>`;
+            const data = await fetchCoinGeckoMarketsPage(page);
+            if (!data || !data.length) break;
+            for (const coin of data) {
+                const sym = coin.symbol.toUpperCase();
+                if (!cgMap.has(sym)) cgMap.set(sym, coin); // ilk gorulen = en yuksek piyasa degerine sahip versiyon
+            }
+            await sleep(2500); // CoinGecko ucretsiz plan hiz sinirina takilmamak icin
+        }
+
+        const results = [];
+        for (const baseSymbol of binanceSymbols) {
+            const coin = cgMap.get(baseSymbol);
+            if (!coin) continue;
+            if (coin.max_supply == null || coin.total_supply == null || coin.circulating_supply == null) continue;
+            if (coin.max_supply > SUPPLY_MAX_LIMIT) continue;
+            const circRatio = coin.circulating_supply / coin.total_supply;
+            if (circRatio < SUPPLY_FULL_CIRC_RATIO) continue;
+
+            results.push({
+                symbol: baseSymbol + "USDT", name: coin.name, price: coin.current_price,
+                maxSupply: coin.max_supply, totalSupply: coin.total_supply,
+                circSupply: coin.circulating_supply, circRatio, marketCap: coin.market_cap
+            });
+        }
+
+        results.sort((a, b) => a.maxSupply - b.maxSupply);
+        renderSupplyScreenResults(results, cgMap.size);
+    } catch (e) {
+        console.error(e);
+        el.innerHTML = `<div class="verdict-box verdict-bearish">Hata: ${e.message}</div>`;
+    } finally {
+        btn.disabled = false;
+        btn.textContent = "▶ Şimdi Tara (~30-60 saniye sürer)";
+    }
+}
+
+function renderSupplyScreenResults(results, totalScanned) {
+    const el = document.getElementById("supplyscreen-results");
+    const now = new Date().toLocaleTimeString('tr-TR');
+
+    if (!results.length) {
+        el.innerHTML = `<div class="empty-state" style="padding:30px 0;"><span class="big-emoji">◎</span>Kriterlere uyan coin bulunamadı (${now}). ${totalScanned} CoinGecko coini tarandı.</div>`;
+        return;
+    }
+
+    function fmtNum(n) {
+        if (n >= 1e9) return (n / 1e9).toFixed(2) + "B";
+        if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
+        if (n >= 1e3) return (n / 1e3).toFixed(0) + "K";
+        return n.toFixed(0);
+    }
+
+    el.innerHTML = `
+        <div class="section-desc" style="margin-bottom:10px;">Tarama saati: ${now} — ${totalScanned} CoinGecko coini tarandı, ${results.length} tanesi kriterlere uydu. En düşük maksimum arz en üstte.</div>
+        <div class="card">
+            <table>
+                <thead><tr><th>Coin</th><th>İsim</th><th>Fiyat</th><th>Max Arz</th><th>Toplam Arz</th><th>Dolaşım Oranı</th><th>Piyasa Değeri</th></tr></thead>
+                <tbody>
+                    ${results.map(r => `
+                        <tr onclick="openCoinAnalysis('${r.symbol}')">
+                            <td data-label="Coin"><div class="sym">${r.symbol}</div></td>
+                            <td data-label="İsim">${r.name}</td>
+                            <td class="num" data-label="Fiyat">$${r.price}</td>
+                            <td class="num" data-label="Max Arz">${fmtNum(r.maxSupply)}</td>
+                            <td class="num" data-label="Toplam Arz">${fmtNum(r.totalSupply)}</td>
+                            <td class="pos" data-label="Dolaşım Oranı">%${(r.circRatio * 100).toFixed(1)}</td>
+                            <td class="num" data-label="Piyasa Değeri">$${fmtNum(r.marketCap)}</td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        </div>
+    `;
+}
+
 // ================= SON DAKIKA SPIKE TARAMASI (genis evrende, son kapanan 1dk mumda sert hareket) =================
 // Canli Izleme'den farkli: o SURDURULEBILIR (kucuk bir listeyi surekli izler), bu ise TEK SEFERLIK
 // ggeneris bir tarama (yuzlerce coine bakip "kim daha SIMDI, son 1 dakikada sert hareket etti" sorusuna cevap verir).
@@ -4169,6 +4312,14 @@ if (window.location.hash === "#minutespike") {
     setTimeout(() => {
         openMinuteSpikePage();
         setTimeout(() => runMinuteSpikeScan(), 200);
+    }, 300);
+}
+
+// URL'de #supplyscreen varsa, Dusuk Arz Coinleri sayfasini otomatik ac ve taramayi baslat
+if (window.location.hash === "#supplyscreen") {
+    setTimeout(() => {
+        openSupplyScreenPage();
+        setTimeout(() => runSupplyScreenScan(), 200);
     }, 300);
 }
 
